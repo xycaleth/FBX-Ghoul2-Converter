@@ -31,9 +31,9 @@ struct mdxmHeader_t
 
 struct mdxmSurfHierarchy_t
 {
-	char name[64];
+	char name[MAX_QPATH];
 	unsigned int flags;
-	char shader[64];
+	char shader[MAX_QPATH];
 	int shaderIndex;
 	int parentIndex;
 	int numChildren;
@@ -240,7 +240,15 @@ int AddToHierarchy (
 
 	int thisIndex = hierarchy.size();
 
-	strcpy (hierarchyNode->name, node.GetName());
+	if ( strncmp (node.GetName(), "bolt_", 5) == 0 )
+	{
+		hierarchyNode->name[0] = '*';
+		strcpy (&hierarchyNode->name[1], node.GetName() + 5);
+	}
+	else
+	{
+		strcpy (hierarchyNode->name, node.GetName());
+	}
 	hierarchyNode->flags = 0;
 	hierarchyNode->shader[0] = '\0';
 	hierarchyNode->shaderIndex = 0;
@@ -312,6 +320,7 @@ bool AllModelsHaveSameLoDs ( const SurfaceHierarchyList& hierarchy, int lod )
 	return true;
 }
 
+std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface );
 ModelDetailData CreateModelLod ( const SurfaceHierarchyList& hierarchy, int lod )
 {
 	ModelDetailData data;
@@ -333,6 +342,7 @@ ModelDetailData CreateModelLod ( const SurfaceHierarchyList& hierarchy, int lod 
 		metadata.ofsVerts = metadata.ofsTriangles + sizeof (mdxmTriangle_t) * metadata.numTriangles;
 		metadata.numBoneReferences = 0;
 		metadata.ofsBoneReferences = 0;
+		metadata.ofsEnd = CalculateSurfaceSize (metadata);
 		
 		// Triangles
 		std::vector<mdxmTriangle_t>& triangles = data.surfaces[i].triangles;
@@ -455,6 +465,25 @@ std::size_t CalculateSurfaceHierarchySize ( const SurfaceHierarchyList& hierarch
 	return filesize;
 }
 
+std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface )
+{
+	std::size_t filesize = 0;
+
+	// Surface data
+	filesize += sizeof (mdxmSurface_t);
+
+	// Triangles
+	filesize += sizeof (mdxmTriangle_t) * surface.numTriangles;
+
+	// Vertices
+	filesize += sizeof (mdxmVertex_t) * surface.numVerts;
+
+	// Texcoords
+	filesize += sizeof (mdxmVertexTexcoord_t) * surface.numVerts;
+
+	return filesize;
+}
+
 std::size_t CalculateLODSize (
 		const std::vector<ModelDetailData>& modelData,
 		int lod )
@@ -474,17 +503,7 @@ std::size_t CalculateLODSize (
 	{
 		const GLMSurface& surface = surfaces[i];
 
-		// Surface data
-		filesize += sizeof (mdxmSurface_t);
-
-		// Triangles
-		filesize += sizeof (mdxmTriangle_t) * surface.metadata.numTriangles;
-
-		// Vertices
-		filesize += sizeof (mdxmVertex_t) * surface.metadata.numVerts;
-
-		// Texcoords
-		filesize += sizeof (mdxmVertexTexcoord_t) * surface.metadata.numVerts;
+		filesize += CalculateSurfaceSize (surface.metadata);
 	}
 
 	return filesize;
@@ -535,47 +554,52 @@ void MakeGLMFile ( const FbxNode& root )
 	mdxmHeader_t *header = reinterpret_cast<mdxmHeader_t *>(&buffer[0]);
 	header->ident = MDXM_IDENT;
 	header->version = MDXM_VERSION;
-	strcpy (header->name, "models/luke/model.glm");
-	header->animName[0] = '\0';
-	header->animIndex = 0;
-	header->numBones = 0;
+	strcpy (header->name, "test.glm");
+	strcpy (header->animName, "models/players/_humanoid/_humanoid");
+	header->animIndex = -1;
+	header->numBones = 53;
 	header->numLODs = static_cast<int>(modelDetails.size());
 	header->ofsLODs = lodBase;
 	header->numSurfaces = static_cast<int>(surfaceHierarchy.size());
-	header->ofsSurfHierarchy = hierarchyOffsetsBase;
+	header->ofsSurfHierarchy = hierarchyBase;
 	header->ofsEnd = filesize;
 
 	// Surface offsets and hierarchy
-	int *hierarchyOffsets = reinterpret_cast<int *>(&buffer[hierarchyOffsetsBase]);
-	mdxmSurfHierarchy_t *hierarchy = reinterpret_cast<mdxmSurfHierarchy_t *>(&buffer[hierarchyBase]);
+	char *hierarchyOffsetsBasePtr = &buffer[hierarchyOffsetsBase];
+	int *hierarchyOffsets = reinterpret_cast<int *>(hierarchyOffsetsBasePtr);
 
+	// Base for the offset is at the start of this array of offsets.
 	int hierarchyOffset = sizeof (int) * header->numSurfaces;
+	mdxmSurfHierarchy_t *hierarchy = reinterpret_cast<mdxmSurfHierarchy_t *>(&hierarchyOffsetsBasePtr[hierarchyOffset]);
+
 	for ( int i = 0; i < header->numSurfaces; i++ )
 	{
 		const GLMSurfaceHierarchy& surface = surfaceHierarchy[i];
+
 		hierarchyOffsets[i] = hierarchyOffset;
 
-		std::memcpy (&hierarchy[i], surface.metadata, surface.metadataSize);
+		std::memcpy (hierarchy, surface.metadata, surface.metadataSize);
+
 		hierarchyOffset += surface.metadataSize;
+		hierarchy = reinterpret_cast<mdxmSurfHierarchy_t *>(&hierarchyOffsetsBasePtr[hierarchyOffset]);
 	}
 
 	// LODs
-	char *lods = reinterpret_cast<char *>(&buffer[lodBase]);
+	char *lodBasePtr = reinterpret_cast<char *>(&buffer[lodBase]);
 	int lodOffset = 0;
 	for ( int lod = 0; lod < header->numLODs; lod++ )
 	{
 		const ModelDetailData& modelDetail = modelDetails[lod];
 
 		// Write offset to next header
-		int *nextLOD = reinterpret_cast<int *>(lods + lodOffset);
-
-		lodOffset += CalculateLODSize (modelDetails, lod);
+		int lodOffset = CalculateLODSize (modelDetails, lod);
+		int *nextLOD = reinterpret_cast<int *>(lodBasePtr);
 		*nextLOD = lodOffset;
 
-		int *surfaceOffsets = nextLOD + sizeof (int);
-		char *surfaceData = reinterpret_cast<char *>(&surfaceOffsets[header->numSurfaces]);
+		int *surfaceOffsets = reinterpret_cast<int *>(lodBasePtr + sizeof (int));
+		char *surfaceData = reinterpret_cast<char *>(surfaceOffsets);
+		int surfaceOffset = sizeof (int) * header->numSurfaces;
 
-		int surfaceOffset = 0;
 		for ( int i = 0; i < header->numSurfaces; i++ )
 		{
 			const GLMSurface& glmSurface = modelDetail.surfaces[i];
@@ -599,6 +623,8 @@ void MakeGLMFile ( const FbxNode& root )
 			std::memcpy (texcoords, glmSurface.texcoords.data(), sizeof (mdxmVertexTexcoord_t) * surface->numVerts);
 			surfaceOffset += sizeof (mdxmVertexTexcoord_t) * surface->numVerts;
 		}
+
+		lodBasePtr += lodOffset;
 	}
 
 	std::ofstream file ("test.glm", std::ios::binary);
