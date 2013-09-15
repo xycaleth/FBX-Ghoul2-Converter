@@ -867,7 +867,6 @@ void MakeGLMFile ( FbxScene& scene, FbxNode& root )
 
 int main ( int argc, char *argv[] )
 {
-	std::cout << "Hello World\n";
 	FbxManager *fbxManager = FbxManager::Create();
 
 	FbxIOSettings *ios = FbxIOSettings::Create (fbxManager, IOSROOT);
@@ -891,15 +890,6 @@ int main ( int argc, char *argv[] )
 
 	FbxScene *scene = FbxScene::Create (fbxManager, "model");
 	importer->Import (scene);
-
-	if ( scene->GetCharacterCount() > 0 )
-	{
-		std::cout << "There are " << scene->GetCharacterCount() << " characters\n";
-	}
-	else
-	{
-		std::cout << "No character!\n";
-	}
 
 	FbxNode *root = scene->GetRootNode();
 	if ( root == NULL )
