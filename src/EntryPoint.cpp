@@ -30,6 +30,9 @@ struct mdxmHeader_t
 	int ofsEnd;
 };
 
+const int G2SURFACE_BOLT		= 0x1;
+const int G2SURFACE_HIDDEN	= 0x2;
+
 struct mdxmSurfHierarchy_t
 {
 	char name[MAX_QPATH];
@@ -269,12 +272,12 @@ int AddToHierarchy (
 
 	if ( hierarchyNode->name[0] == '*' )
 	{
-		hierarchyNode->flags |= 1;
+		hierarchyNode->flags |= G2SURFACE_BOLT;
 	}
 
 	if ( strstr (hierarchyNode->name, "_off") )
 	{
-		hierarchyNode->flags |= 2;
+		hierarchyNode->flags |= G2SURFACE_HIDDEN;
 	}
 
 	GLMSurfaceHierarchy surface;
@@ -447,9 +450,15 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 
 		if ( uvs == NULL )
 		{
-			for ( int j = 0, count = mesh.GetPolygonVertexCount(); j < count; j++ )
+			// The only surfaces with no UVs are the tags and the "stupidtriangle" surface.
+			
+			// Tags are oriented by taking the last vertex as the origin, and calculating
+			// the different edge lengths. The mid-length edge is taken to be the Y axis,
+			// and shortest to be X axis.
+			int order[] = {1, 2, 0};
+			for ( int j = 0, count = 3; j < count; j++ )
 			{
-				Vertex& vertex = uniqueVertices[indices[j]];
+				Vertex& vertex = uniqueVertices[j];
 				if ( vertex.filled )
 				{
 					continue;
@@ -457,12 +466,12 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 
 				vertex.filled = true;
 
-				FbxVector4 position = globalMatrix.MultT (positions[indices[j]]);
+				FbxVector4 position = globalMatrix.MultT (positions[order[j]]);
 				vertex.positionAndNormal.position[0] = static_cast<float>(position[0]);
 				vertex.positionAndNormal.position[1] = static_cast<float>(position[1]);
 				vertex.positionAndNormal.position[2] = static_cast<float>(position[2]);
 
-				FbxVector4 normal = globalMatrix.MultT (normals[indices[j]]);
+				FbxVector4 normal = globalMatrix.MultT (normals[order[j]]);
 				vertex.positionAndNormal.normal[0] = normal[0];
 				vertex.positionAndNormal.normal[1] = normal[1];
 				vertex.positionAndNormal.normal[2] = normal[2];
@@ -477,6 +486,11 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 				vertex.texcoord.st[0] = 0.0f;
 				vertex.texcoord.st[1] = 0.0f;
 			}
+
+			// Indices
+			triangles[0].indexes[0] = 0;
+			triangles[0].indexes[1] = 1;
+			triangles[0].indexes[2] = 2;
 		}
 		else
 		{
