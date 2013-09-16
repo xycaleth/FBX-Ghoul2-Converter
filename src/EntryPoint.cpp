@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <fbxsdk/fileio/fbxiosettings.h>
 #include <fstream>
@@ -102,46 +103,6 @@ struct ModelDetailData
 	std::vector<GLMSurface> surfaces;
 };
 
-void PrintNodeAttribute ( FbxNodeAttribute *attribute )
-{
-	switch ( attribute->GetAttributeType() )
-	{
-		case FbxNodeAttribute::eMesh:
-		{
-			std::cout << "There's a mesh!\n";
-
-			FbxMesh *mesh = static_cast<FbxMesh *>(attribute);
-			std::cout << "It has " << mesh->GetControlPointsCount() << " vertices.\n";
-			std::cout << "It has " << mesh->mPolygons.Size() << " polygons\n";
-			std::cout << "It has " << mesh->GetPolygonVertexCount() << " indices\n";
-
-			if ( mesh->IsTriangleMesh() ) std::cout << "It has only triangles! :D\n";
-			break;
-		}
-
-		default:
-			std::cout << "There's no mesh!\n";
-	}
-}
-
-void PrintNodeAttributes ( FbxNode *node )
-{
-	// Default attribute first
-	FbxNodeAttribute *defaultAttribute = node->GetNodeAttribute();
-	if ( defaultAttribute == NULL )
-	{
-		std::cout << "No default attribute for " << node->GetName() << '\n';
-		return;
-	}
-
-	PrintNodeAttribute (defaultAttribute);
-
-	for ( int i = 0; i < node->GetNodeAttributeCount(); i++ )
-	{
-		PrintNodeAttribute (node->GetNodeAttributeByIndex (i));
-	}
-}
-
 FbxMesh *GetFBXMesh ( FbxNodeAttribute& attribute )
 {
 	switch ( attribute.GetAttributeType() )
@@ -193,34 +154,6 @@ FbxMesh *GetFBXMesh ( FbxNode& node, int lod )
 	return mesh;
 }
 
-void PrintSceneGraph ( FbxNode *node, int level )
-{
-	for ( int i = 0; i < level; i++ )
-	{
-		std::cout << '.';
-	}
-
-	std::cout << node->GetName() << '\n';
-	PrintNodeAttributes (node);
-
-	for ( int i = 0; i < node->GetChildCount(); i++ )
-	{
-		PrintSceneGraph (node->GetChild (i), level + 1);
-	}
-}
-
-void PrintAllPropertyNames ( const FbxObject& object )
-{
-	FbxProperty prop = object.GetFirstProperty();
-	do
-	{
-		std::cout << prop.GetName() << '\n';
-		prop = object.GetNextProperty (prop);
-	} while ( prop.IsValid() );
-
-	std::cout << "\n\n";
-}
-
 FbxNode *GetRootMesh ( FbxNode& root )
 {
 	for ( int i = 0, count = root.GetChildCount(); i < count; i++ )
@@ -264,6 +197,7 @@ int AddToHierarchy (
 	{
 		strcpy (hierarchyNode->name, node.GetName());
 	}
+
 	hierarchyNode->flags = 0;
 	hierarchyNode->shader[0] = '\0';
 	hierarchyNode->shaderIndex = 0;
@@ -304,10 +238,8 @@ int CreateSurfaceHierarchy ( FbxNode& node, SurfaceHierarchyList& hierarchyList,
 		childIndices.push_back (childIndex);
 	}
 
-	for ( int i = 0; i < hierarchyList[index].metadata->numChildren; i++ )
-	{
-		hierarchyList[index].metadata->childIndex[i] = childIndices[i];
-	}
+	std::copy (childIndices.begin(), childIndices.end(),
+				hierarchyList[index].metadata->childIndex);
 
 	return index;
 }
