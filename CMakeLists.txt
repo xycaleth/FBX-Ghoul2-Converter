@@ -5,20 +5,33 @@ set(SOURCE_FILES
 	"src/EntryPoint.cpp"
 )
 
-if(APPLE)
-	set(FBX_ROOT "/Applications/Autodesk/FBX\ SDK/2014.1")
+if(NOT FBX_ROOT)
+	if(APPLE)
+		set(FBX_ROOT "/Applications/Autodesk/FBX\ SDK/2014.1")
+	elseif(WIN32)
+		set(FBX_ROOT "$ENV{ProgramFiles}\\Autodesk\\FBX\\FBX SDK\\2014.1")
+	endif()
 endif()
 
 set(INCLUDE_PATH
-	${INCUDE_DIR}
+	${INCUDE_PATH}
 	${FBX_ROOT}/include
 )
 
-set(LINK_LIBRARIES
-	${LINK_LIBRARIES}
-	${FBX_ROOT}/lib/gcc4/ub/debug/libfbxsdk.a
-	/System/Library/Frameworks/Carbon.framework
-)
+if(APPLE)
+	set(LINK_LIBRARIES
+		${LINK_LIBRARIES}
+		/System/Library/Frameworks/Carbon.framework
+		debug ${FBX_ROOT}/lib/gcc4/ub/debug/libfbxsdk.a
+		optimized ${FBX_ROOT}/lib/gcc4/ub/release/libfbxsdk.a
+	)
+elseif(WIN32)
+	set(LINK_LIBRARIES
+		${LINK_LIBRARIES}
+		debug ${FBX_ROOT}/lib/vs2012/x86/debug/libfbxsdk-md.lib
+		optimized ${FBX_ROOT}/lib/vs2012/x86/release/libfbxsdk-md.lib
+	)
+endif()
 
 include_directories(${INCLUDE_PATH})
 

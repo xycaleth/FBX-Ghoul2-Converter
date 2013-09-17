@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <fbxsdk/fileio/fbxiosettings.h>
 #include <fstream>
 #include <iostream>
@@ -136,13 +137,13 @@ FbxMesh *GetFBXMesh ( FbxNode& node, int lod )
 		FbxMesh *lodMesh = GetFBXMesh (*attribute);
 		if ( lodMesh != NULL )
 		{
+			mesh = lodMesh;
+			lod--;
+
 			if ( lod == 0 )
 			{
 				break;
 			}
-
-			mesh = lodMesh;
-			lod--;
 		}
 	}
 
@@ -197,6 +198,8 @@ int AddToHierarchy (
 	{
 		strcpy (hierarchyNode->name, node.GetName());
 	}
+	std::transform (hierarchyNode->name, hierarchyNode->name + sizeof (hierarchyNode->name),
+						hierarchyNode->name, std::tolower);
 
 	hierarchyNode->flags = 0;
 	hierarchyNode->shader[0] = '\0';
@@ -239,7 +242,7 @@ int CreateSurfaceHierarchy ( FbxNode& node, SurfaceHierarchyList& hierarchyList,
 	}
 
 	std::copy (childIndices.begin(), childIndices.end(),
-				hierarchyList[index].metadata->childIndex);
+				&hierarchyList[index].metadata->childIndex[0]);
 
 	return index;
 }
@@ -281,8 +284,8 @@ struct VertexId
 {
 	VertexId() {}
 	VertexId ( int positionId, int texcoordId )
-		: positionId (positionId),
-			texcoordId (texcoordId)
+		: positionId (positionId)
+		, texcoordId (texcoordId)
 	{
 	}
 
@@ -314,6 +317,25 @@ struct Vertex
 	mdxmVertexTexcoord_t texcoord;
 };
 
+void CopyVertexData ( Vertex& vertex, const FbxAMatrix& globalMatrix, const FbxVector4& position, const FbxVector4& normal )
+{
+	FbxVector4 positionWS = globalMatrix.MultT (position);
+	vertex.positionAndNormal.position[0] = static_cast<float>(positionWS[0]);
+	vertex.positionAndNormal.position[1] = static_cast<float>(positionWS[1]);
+	vertex.positionAndNormal.position[2] = static_cast<float>(positionWS[2]);
+
+	FbxVector4 normalWS = globalMatrix.MultT (normal);
+	vertex.positionAndNormal.normal[0] = static_cast<float>(normalWS[0]);
+	vertex.positionAndNormal.normal[1] = static_cast<float>(normalWS[1]);
+	vertex.positionAndNormal.normal[2] = static_cast<float>(normalWS[2]);
+
+	vertex.positionAndNormal.numWeightsAndBoneIndexes = 0u;
+	vertex.positionAndNormal.boneWeightings[0] = 255u;
+	vertex.positionAndNormal.boneWeightings[1] = 0u;
+	vertex.positionAndNormal.boneWeightings[2] = 0u;
+	vertex.positionAndNormal.boneWeightings[3] = 0u;
+}
+
 std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface );
 ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hierarchy, int lod )
 {
@@ -324,17 +346,12 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 	std::vector<int> newIndices;
 	std::map<VertexId, int> uniqueVerticesMap;
 	std::vector<Vertex> uniqueVertices;
-	for ( int i = 0; i < hierarchy.size(); i++ )
+	for ( std::size_t i = 0; i < hierarchy.size(); i++ )
 	{
 		FbxNode& fbxNode = *hierarchy[i].node;
 		FbxMesh& mesh = *GetFBXMesh (fbxNode, lod);
 		const mdxmSurfHierarchy_t& surfaceHierarchy = *hierarchy[i].metadata;
 		mdxmSurface_t& metadata = data.surfaces[i].metadata;
-
-		// Get the relevant vertex data from the mesh first.
-		FbxAMatrix globalMatrix;
-		globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&fbxNode);
-
 		const int *indices = mesh.GetPolygonVertices();
 		const FbxVector4 *positions = mesh.GetControlPoints();
 		const FbxLayer *layer0 = mesh.GetLayer (0);
@@ -354,8 +371,8 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 		const FbxLayerElementUV *uvLayer = layer0->GetUVs();
 		FbxLayerElementArrayTemplate<FbxVector2> *uvs = NULL;
 
-		int numUniquePoints = mesh.GetControlPointsCount();
-		int numPositions = mesh.GetControlPointsCount();
+		std::size_t numUniquePoints = mesh.GetControlPointsCount();
+		std::size_t numPositions = mesh.GetControlPointsCount();
 		if ( uvLayer != NULL )
 		{
 			if ( !mesh.GetTextureUV (&uvs) )
@@ -377,8 +394,11 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 		uniqueVertices.clear();
 		if ( uniqueVertices.size() < numUniquePoints )
 		{
-			uniqueVertices.resize (numUniquePoints);
+			uniqueVertices.reserve (numUniquePoints);
 		}
+
+		FbxAMatrix globalMatrix;
+		globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&fbxNode);
 
 		if ( uvs == NULL )
 		{
@@ -387,36 +407,18 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 			// Tags are oriented by taking the last vertex as the origin, and calculating
 			// the different edge lengths. The mid-length edge is taken to be the Y axis,
 			// and shortest to be X axis.
-			int order[] = {1, 2, 0};
-			for ( int j = 0, count = 3; j < count; j++ )
+			const int order[] = {1, 2, 0};
+			for ( int j = 0; j < 3; j++ )
 			{
-				Vertex& vertex = uniqueVertices[j];
-				if ( vertex.filled )
-				{
-					continue;
-				}
+				Vertex vertex;
 
-				vertex.filled = true;
-
-				FbxVector4 position = globalMatrix.MultT (positions[order[j]]);
-				vertex.positionAndNormal.position[0] = static_cast<float>(position[0]);
-				vertex.positionAndNormal.position[1] = static_cast<float>(position[1]);
-				vertex.positionAndNormal.position[2] = static_cast<float>(position[2]);
-
-				FbxVector4 normal = globalMatrix.MultT (normals[order[j]]);
-				vertex.positionAndNormal.normal[0] = normal[0];
-				vertex.positionAndNormal.normal[1] = normal[1];
-				vertex.positionAndNormal.normal[2] = normal[2];
-
-				vertex.positionAndNormal.numWeightsAndBoneIndexes = 0;
-				vertex.positionAndNormal.boneWeightings[0] = 255;
-				vertex.positionAndNormal.boneWeightings[1] = 0;
-				vertex.positionAndNormal.boneWeightings[2] = 0;
-				vertex.positionAndNormal.boneWeightings[3] = 0;
+				CopyVertexData (vertex, globalMatrix, positions[order[j]], normals[order[j]]);
 
 				// Not strictly necessary but makes things cleaner in the output file.
 				vertex.texcoord.st[0] = 0.0f;
 				vertex.texcoord.st[1] = 0.0f;
+
+				uniqueVertices.push_back (vertex);
 			}
 
 			// Indices
@@ -432,6 +434,9 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 			FbxLayerElementArrayTemplate<int>& uvIndices = uvLayer->GetIndexArray();
 			if ( numUniquePoints == numPositions )
 			{
+				// With the same number of texture coordinates, and the same number of
+				// position/normals, it's much easier to produce unique vertices.
+				uniqueVertices.resize (numUniquePoints);
 				for ( int j = 0, count = uvIndices.GetCount(); j < count; j++ )
 				{
 					Vertex& vertex = uniqueVertices[indices[j]];
@@ -442,25 +447,11 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 
 					vertex.filled = true;
 
-					FbxVector4 position = globalMatrix.MultT (positions[indices[j]]);
-					vertex.positionAndNormal.position[0] = static_cast<float>(position[0]);
-					vertex.positionAndNormal.position[1] = static_cast<float>(position[1]);
-					vertex.positionAndNormal.position[2] = static_cast<float>(position[2]);
-
-					FbxVector4 normal = globalMatrix.MultT (normals[indices[j]]);
-					vertex.positionAndNormal.normal[0] = normal[0];
-					vertex.positionAndNormal.normal[1] = normal[1];
-					vertex.positionAndNormal.normal[2] = normal[2];
-
-					vertex.positionAndNormal.numWeightsAndBoneIndexes = 0;
-					vertex.positionAndNormal.boneWeightings[0] = 255;
-					vertex.positionAndNormal.boneWeightings[1] = 0;
-					vertex.positionAndNormal.boneWeightings[2] = 0;
-					vertex.positionAndNormal.boneWeightings[3] = 0;
+					CopyVertexData (vertex, globalMatrix, positions[indices[j]], normals[indices[j]]);
 
 					FbxVector2 tc = uvs->GetAt (uvIndices[j]);
-					vertex.texcoord.st[0] = tc[0];
-					vertex.texcoord.st[1] = 1.0f - tc[1];
+					vertex.texcoord.st[0] = static_cast<float>(tc[0]);
+					vertex.texcoord.st[1] = 1.0f - static_cast<float>(tc[1]);
 				}
 
 				// Triangles
@@ -474,11 +465,13 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 			}
 			else
 			{
-				uniqueVerticesMap.clear();
 				int index = 0;
+
+				uniqueVerticesMap.clear();
 				for ( int tri = 0, k = 0; tri < numTriangles; tri++ )
 				{
 					int triangle[3];
+
 					for ( int j = 0; j < 3; k++, j++ )
 					{
 						VertexId id (indices[k], uvIndices[k]);
@@ -486,31 +479,19 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 
 						if ( it == uniqueVerticesMap.end() )
 						{
+							Vertex v;
+
 							uniqueVerticesMap.insert (std::make_pair (id, index));
-							Vertex& v = uniqueVertices[index];
-
-							FbxVector4 position = globalMatrix.MultT (positions[id.positionId]);
-							v.positionAndNormal.position[0] = static_cast<float>(position[0]);
-							v.positionAndNormal.position[1] = static_cast<float>(position[1]);
-							v.positionAndNormal.position[2] = static_cast<float>(position[2]);
-
-							FbxVector4 normal = globalMatrix.MultT (normals[id.positionId]);
-							v.positionAndNormal.normal[0] = normal[0];
-							v.positionAndNormal.normal[1] = normal[1];
-							v.positionAndNormal.normal[2] = normal[2];
-
-							v.positionAndNormal.numWeightsAndBoneIndexes = 0;
-							v.positionAndNormal.boneWeightings[0] = 255;
-							v.positionAndNormal.boneWeightings[1] = 0;
-							v.positionAndNormal.boneWeightings[2] = 0;
-							v.positionAndNormal.boneWeightings[3] = 0;
+							CopyVertexData (v, globalMatrix, positions[id.positionId], normals[id.positionId]);
 
 							FbxVector2 tc = uvs->GetAt (id.texcoordId);
-							v.texcoord.st[0] = tc[0];
-							v.texcoord.st[1] = 1.0f - tc[1];
+							v.texcoord.st[0] = static_cast<float>(tc[0]);
+							v.texcoord.st[1] = 1.0f - static_cast<float>(tc[1]);
 
 							triangle[j] = index;
 							index++;
+
+							uniqueVertices.push_back (v);
 						}
 						else
 						{
@@ -528,10 +509,11 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 		}
 
 		std::vector<mdxmVertexTexcoord_t>& texcoords = data.surfaces[i].texcoords;
-		texcoords.resize (numVerts);
-
 		std::vector<mdxmVertex_t>& vertices = data.surfaces[i].vertices;
+
+		texcoords.resize (numVerts);
 		vertices.resize (numVerts);
+
 		for ( int j = 0; j < numVerts; j++ )
 		{
 			vertices[j] = uniqueVertices[j].positionAndNormal;
@@ -782,7 +764,7 @@ void MakeGLMFile ( FbxScene& scene, FbxNode& root )
 		lodBasePtr += lodOffset;
 	}
 
-	for ( int i = 0; i < surfaceHierarchy.size(); i++ )
+	for ( std::size_t i = 0; i < surfaceHierarchy.size(); i++ )
 	{
 		char *data = reinterpret_cast<char *>(surfaceHierarchy[i].metadata);
 		delete [] data;
