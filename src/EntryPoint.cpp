@@ -199,7 +199,7 @@ int AddToHierarchy (
 		strcpy (hierarchyNode->name, node.GetName());
 	}
 	std::transform (hierarchyNode->name, hierarchyNode->name + sizeof (hierarchyNode->name),
-						hierarchyNode->name, std::tolower);
+						hierarchyNode->name, []( char c ) { return std::tolower (c); });
 
 	hierarchyNode->flags = 0;
 	hierarchyNode->shader[0] = '\0';
