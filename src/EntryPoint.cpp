@@ -8,101 +8,7 @@
 #include <map>
 #include <vector>
 
-const int MDXM_IDENT = ('M' << 24) | ('G' << 16) | ('L' << 8) | '2';
-const int MDXM_VERSION = 6;
-const int MAX_QPATH = 64;
-
-struct mdxmHeader_t
-{
-	int ident;
-	int version;
-
-	char name[MAX_QPATH];
-	char animName[MAX_QPATH];
-
-	int animIndex;
-	int numBones;
-
-	int numLODs;
-	int ofsLODs;
-
-	int numSurfaces;
-	int ofsSurfHierarchy;
-
-	int ofsEnd;
-};
-
-const int G2SURFACE_BOLT		= 0x1;
-const int G2SURFACE_HIDDEN	= 0x2;
-
-struct mdxmSurfHierarchy_t
-{
-	char name[MAX_QPATH];
-	unsigned int flags;
-	char shader[MAX_QPATH];
-	int shaderIndex;
-	int parentIndex;
-	int numChildren;
-	int childIndex[1];
-};
-
-struct mdxmSurface_t
-{
-	int ident;
-	int thisSurfaceIndex;
-	int ofsHeader;
-	
-	int numVerts;
-	int ofsVerts;
-
-	int numTriangles;
-	int ofsTriangles;
-
-	int numBoneReferences;
-	int ofsBoneReferences;
-
-	int ofsEnd;
-};
-
-struct mdxmTriangle_t
-{
-	int indexes[3];
-};
-
-struct mdxmVertex_t
-{
-	float normal[3];
-	float position[3];
-	unsigned int numWeightsAndBoneIndexes;
-	unsigned char boneWeightings[4];
-};
-
-struct mdxmVertexTexcoord_t
-{
-	float st[2];
-};
-
-struct GLMSurfaceHierarchy
-{
-	FbxNode *node;
-	mdxmSurfHierarchy_t *metadata;
-	std::size_t metadataSize;
-};
-
-struct GLMSurface
-{
-	mdxmSurface_t metadata;
-	std::vector<mdxmTriangle_t> triangles;
-	std::vector<mdxmVertex_t> vertices;
-	std::vector<mdxmVertexTexcoord_t> texcoords;
-	std::vector<int> boneReferences;
-};
-
-struct ModelDetailData
-{
-	int lod;
-	std::vector<GLMSurface> surfaces;
-};
+#include "GLM.h"
 
 FbxMesh *GetFBXMesh ( FbxNodeAttribute& attribute )
 {
@@ -113,7 +19,6 @@ FbxMesh *GetFBXMesh ( FbxNodeAttribute& attribute )
 		default:
 			return nullptr;
 	}
-
 }
 
 FbxMesh *GetFBXMesh ( FbxNode& node, int lod )
@@ -175,7 +80,14 @@ FbxNode *GetRootMesh ( FbxNode& root )
 	return nullptr;
 }
 
-typedef std::vector<GLMSurfaceHierarchy> SurfaceHierarchyList;
+
+char *CopyString ( char *destination, const char *source, std::size_t destinationSize )
+{
+	std::strncpy (destination, source, destinationSize - 1);
+	destination[destinationSize - 1] = '\0';
+
+	return destination;
+}
 
 int AddToHierarchy (
 	int parentIndex,
@@ -192,11 +104,11 @@ int AddToHierarchy (
 	if ( strncmp (node.GetName(), "bolt_", 5) == 0 )
 	{
 		hierarchyNode->name[0] = '*';
-		strcpy (&hierarchyNode->name[1], node.GetName() + 5);
+		CopyString (&hierarchyNode->name[1], node.GetName() + 5, sizeof (hierarchyNode->name) - 1);
 	}
 	else
 	{
-		strcpy (hierarchyNode->name, node.GetName());
+		CopyString (hierarchyNode->name, node.GetName() + 5, sizeof (hierarchyNode->name));
 	}
 	std::transform (hierarchyNode->name, hierarchyNode->name + sizeof (hierarchyNode->name),
 						hierarchyNode->name, []( char c ) { return std::tolower (c); });
@@ -336,34 +248,124 @@ void CopyVertexData ( Vertex& vertex, const FbxAMatrix& globalMatrix, const FbxV
 	vertex.positionAndNormal.boneWeightings[3] = 0u;
 }
 
-std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface );
+std::size_t CalculateHeaderSize()
+{
+	return sizeof (mdxmHeader_t);
+}
+
+std::size_t CalculateSurfaceHierarchySize ( const SurfaceHierarchyList& hierarchy )
+{
+	std::size_t filesize = 0;
+
+	// Hierarchy offsets
+	filesize += hierarchy.size() * sizeof (int);
+
+	// Surface hierarchy data
+	for ( const auto& surface : hierarchy )
+	{
+		filesize += surface.metadataSize;
+	}
+
+	return filesize;
+}
+
+std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface )
+{
+	std::size_t filesize = 0;
+
+	// Surface data
+	filesize += sizeof (mdxmSurface_t);
+
+	// Triangles
+	filesize += sizeof (mdxmTriangle_t) * surface.numTriangles;
+
+	// Vertices
+	filesize += sizeof (mdxmVertex_t) * surface.numVerts;
+
+	// Texcoords
+	filesize += sizeof (mdxmVertexTexcoord_t) * surface.numVerts;
+
+	// Bone references!
+	filesize += sizeof (int) * surface.numBoneReferences;
+
+	return filesize;
+}
+
+std::size_t CalculateLODSize ( const ModelDetailData& modelDetail )
+{
+	std::size_t filesize = 0;
+
+	// LOD data
+	const std::vector<GLMSurface>& surfaces = modelDetail.surfaces;
+	
+	// Next LOD offset
+	filesize += sizeof (int);
+
+	// Surface offsets
+	filesize += sizeof (int) * modelDetail.surfaces.size();
+
+	for ( const auto& surface : surfaces )
+	{
+		filesize += CalculateSurfaceSize (surface.metadata);
+	}
+
+	return filesize;
+}
+
+std::size_t CalculateLODSize (
+		const std::vector<ModelDetailData>& modelData )
+{
+	std::size_t filesize = 0;
+
+	for ( const auto& modelDetail : modelData )
+	{
+		filesize += CalculateLODSize (modelDetail);
+	}
+
+	return filesize;
+}
+
+std::size_t CalculateGLMFileSize (
+		const SurfaceHierarchyList& hierarchy,
+		const std::vector<ModelDetailData>& modelData )
+{
+	return CalculateHeaderSize () + 
+			CalculateSurfaceHierarchySize (hierarchy) +
+			CalculateLODSize (modelData);
+}
+
 ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hierarchy, int lod )
 {
 	ModelDetailData data;
 	data.lod = lod;
 	data.surfaces.resize (hierarchy.size());
 
-	std::vector<int> newIndices;
+	// Define these variables outside the loop to prevent repeated
+	// allocation and freeing of memory.
 	std::map<VertexId, int> uniqueVerticesMap;
 	std::vector<Vertex> uniqueVertices;
+
 	for ( std::size_t i = 0; i < hierarchy.size(); i++ )
 	{
-		FbxNode& fbxNode = *hierarchy[i].node;
-		FbxMesh& mesh = *GetFBXMesh (fbxNode, lod);
 		const mdxmSurfHierarchy_t& surfaceHierarchy = *hierarchy[i].metadata;
+
+		FbxNode& fbxNode = *hierarchy[i].node;
 		mdxmSurface_t& metadata = data.surfaces[i].metadata;
+
+		FbxMesh& mesh = *GetFBXMesh (fbxNode, lod);
 		const int *indices = mesh.GetPolygonVertices();
 		const FbxVector4 *positions = mesh.GetControlPoints();
 		const FbxLayer *layer0 = mesh.GetLayer (0);
+
 		if ( layer0 == nullptr )
 		{
-			std::cerr << "No layer 0 for mesh " << i << " (" << surfaceHierarchy.name << ")\n";
+			std::cerr << "Normals and texture coordinates not found for surface " << i << " (" << surfaceHierarchy.name << ")\n";
 		}
 
 		const FbxLayerElementNormal *normalsLayer = layer0->GetNormals();
 		if ( normalsLayer == nullptr )
 		{
-			std::cerr << "No normals for mesh " << i << " (" << surfaceHierarchy.name << ")\n";
+			std::cerr << "No normals for surface " << i << " (" << surfaceHierarchy.name << ")\n";
 		}
 
 		FbxLayerElementArrayTemplate<FbxVector4>& normals = normalsLayer->GetDirectArray();
@@ -377,7 +379,7 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 		{
 			if ( !mesh.GetTextureUV (&uvs) )
 			{
-				std::cerr << "Failed to retrieve texture UVs when UV layer exists.\n";
+				std::cerr << "Failed to retrieve texture UVs for surface " << i << '(' << surfaceHierarchy.name << ")\n";
 			}
 			else
 			{
@@ -525,7 +527,13 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 		boneReferences.resize (1);
 		boneReferences[0] = 0;
 
-		// Fill in header offset when writing.
+		int ofsBoneReferences = 0;
+		ofsBoneReferences += sizeof (mdxmSurface_t);
+		ofsBoneReferences += sizeof (mdxmTriangle_t) * metadata.numTriangles;
+		ofsBoneReferences += sizeof (mdxmVertex_t) * metadata.numVerts;
+		ofsBoneReferences += sizeof (mdxmVertexTexcoord_t) * metadata.numVerts;
+
+		// Fill in the metadata
 		metadata.ident = 0;
 		metadata.thisSurfaceIndex = i;
 		metadata.ofsTriangles = sizeof (mdxmSurface_t);
@@ -533,13 +541,6 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 		metadata.numVerts = numVerts;
 		metadata.ofsVerts = metadata.ofsTriangles + sizeof (mdxmTriangle_t) * metadata.numTriangles;
 		metadata.numBoneReferences = 1;
-
-		int ofsBoneReferences = 0;
-		ofsBoneReferences += sizeof (mdxmSurface_t);
-		ofsBoneReferences += sizeof (mdxmTriangle_t) * metadata.numTriangles;
-		ofsBoneReferences += sizeof (mdxmVertex_t) * metadata.numVerts;
-		ofsBoneReferences += sizeof (mdxmVertexTexcoord_t) * metadata.numVerts;
-
 		metadata.ofsBoneReferences = ofsBoneReferences;
 		metadata.ofsEnd = CalculateSurfaceSize (metadata);
 	}
@@ -565,7 +566,6 @@ std::vector<ModelDetailData> GetModelData ( FbxScene& scene, const SurfaceHierar
 	}
 
 	detailData.reserve (lodCount);
-	std::cout << "There are " << lodCount << " LoDs in root mesh\n";
 	for ( int i = 0; i < lodCount; i++ )
 	{
 		detailData.push_back (CreateModelLod (scene, hierarchy, i));
@@ -574,148 +574,22 @@ std::vector<ModelDetailData> GetModelData ( FbxScene& scene, const SurfaceHierar
 	return detailData;
 }
 
-std::size_t CalculateHeaderSize()
+std::string GetFilename ( const std::string& filePath )
 {
-	return sizeof (mdxmHeader_t);
-}
-
-std::size_t CalculateSurfaceHierarchySize ( const SurfaceHierarchyList& hierarchy )
-{
-	std::size_t filesize = 0;
-
-	// Hierarchy offsets
-	filesize += hierarchy.size() * sizeof (int);
-
-	// Surface hierarchy data
-	for ( const auto& surface : hierarchy )
+	const auto slash = filePath.find_last_of ('/');
+	if ( slash == std::string::npos )
 	{
-		filesize += surface.metadataSize;
+		return filePath;
 	}
 
-	return filesize;
+	return filePath.substr (slash + 1);
 }
 
-std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface )
+bool WriteLoDData ( const mdxmHeader_t& header, char *buffer, const std::vector<ModelDetailData>& modelDetails )
 {
-	std::size_t filesize = 0;
-
-	// Surface data
-	filesize += sizeof (mdxmSurface_t);
-
-	// Triangles
-	filesize += sizeof (mdxmTriangle_t) * surface.numTriangles;
-
-	// Vertices
-	filesize += sizeof (mdxmVertex_t) * surface.numVerts;
-
-	// Texcoords
-	filesize += sizeof (mdxmVertexTexcoord_t) * surface.numVerts;
-
-	// Bone references!
-	filesize += sizeof (int) * surface.numBoneReferences;
-
-	return filesize;
-}
-
-std::size_t CalculateLODSize ( const ModelDetailData& modelDetail )
-{
-	std::size_t filesize = 0;
-
-	// LOD data
-	const std::vector<GLMSurface>& surfaces = modelDetail.surfaces;
-	
-	// Next LOD offset
-	filesize += sizeof (int);
-
-	// Surface offsets
-	filesize += sizeof (int) * modelDetail.surfaces.size();
-
-	for ( const auto& surface : surfaces )
-	{
-		filesize += CalculateSurfaceSize (surface.metadata);
-	}
-
-	return filesize;
-
-}
-
-std::size_t CalculateLODSize (
-		const std::vector<ModelDetailData>& modelData )
-{
-	std::size_t filesize = 0;
-
-	for ( const auto& modelDetail : modelData )
-	{
-		filesize += CalculateLODSize (modelDetail);
-	}
-
-	return filesize;
-}
-
-std::size_t CalculateGLMFileSize (
-		const SurfaceHierarchyList& hierarchy,
-		const std::vector<ModelDetailData>& modelData )
-{
-	return CalculateHeaderSize () + 
-			CalculateSurfaceHierarchySize (hierarchy) +
-			CalculateLODSize (modelData);
-}
-
-void MakeGLMFile ( FbxScene& scene, FbxNode& root )
-{
-	FbxNode *meshRoot = GetRootMesh (root);
-
-	// Create surface hierarchy
-	SurfaceHierarchyList surfaceHierarchy (CreateSurfaceHierarchy (*meshRoot));
-
-	// Create surface data
-	std::vector<ModelDetailData> modelDetails (GetModelData (scene, surfaceHierarchy));
-
-	std::size_t filesize = CalculateGLMFileSize (surfaceHierarchy, modelDetails);
-	
-	// Write data
-	std::vector<char> buffer (filesize, '\0');
-
-	int hierarchyOffsetsBase = sizeof (mdxmHeader_t);
-	int hierarchyBase = hierarchyOffsetsBase + sizeof (int) * surfaceHierarchy.size();
-	int lodBase = hierarchyOffsetsBase + CalculateSurfaceHierarchySize (surfaceHierarchy);
-
-	mdxmHeader_t *header = reinterpret_cast<mdxmHeader_t *>(&buffer[0]);
-	header->ident = MDXM_IDENT;
-	header->version = MDXM_VERSION;
-	strcpy (header->name, "model.glm");
-	strcpy (header->animName, "*default");
-	header->animIndex = -1;
-	header->numBones = 1;
-	header->numLODs = static_cast<int>(modelDetails.size());
-	header->ofsLODs = lodBase;
-	header->numSurfaces = static_cast<int>(surfaceHierarchy.size());
-	header->ofsSurfHierarchy = hierarchyBase;
-	header->ofsEnd = filesize;
-
-	// Surface offsets and hierarchy
-	char *hierarchyOffsetsBasePtr = &buffer[hierarchyOffsetsBase];
-	int *hierarchyOffsets = reinterpret_cast<int *>(hierarchyOffsetsBasePtr);
-
-	// Base for the offset is at the start of this array of offsets.
-	int hierarchyOffset = sizeof (int) * header->numSurfaces;
-	mdxmSurfHierarchy_t *hierarchy = reinterpret_cast<mdxmSurfHierarchy_t *>(&hierarchyOffsetsBasePtr[hierarchyOffset]);
-
-	for ( int i = 0; i < header->numSurfaces; i++ )
-	{
-		const GLMSurfaceHierarchy& surface = surfaceHierarchy[i];
-
-		hierarchyOffsets[i] = hierarchyOffset;
-
-		std::memcpy (hierarchy, surface.metadata, surface.metadataSize);
-
-		hierarchyOffset += surface.metadataSize;
-		hierarchy = reinterpret_cast<mdxmSurfHierarchy_t *>(&hierarchyOffsetsBasePtr[hierarchyOffset]);
-	}
-
-	// LODs
-	char *lodBasePtr = reinterpret_cast<char *>(&buffer[lodBase]);
+	char *lodBasePtr = buffer;
 	int lodOffset = 0;
+
 	for ( const auto& modelDetail : modelDetails )
 	{
 		// Write offset to next header
@@ -725,9 +599,9 @@ void MakeGLMFile ( FbxScene& scene, FbxNode& root )
 
 		int *surfaceOffsets = reinterpret_cast<int *>(lodBasePtr + sizeof (int));
 		char *surfaceData = reinterpret_cast<char *>(surfaceOffsets);
-		int surfaceOffset = sizeof (int) * header->numSurfaces;
+		int surfaceOffset = sizeof (int) * header.numSurfaces;
 
-		for ( int i = 0; i < header->numSurfaces; i++ )
+		for ( unsigned i = 0; i < header.numSurfaces; i++ )
 		{
 			const GLMSurface& glmSurface = modelDetail.surfaces[i];
 
@@ -735,7 +609,7 @@ void MakeGLMFile ( FbxScene& scene, FbxNode& root )
 
 			mdxmSurface_t *surface = reinterpret_cast<mdxmSurface_t *>(&surfaceData[surfaceOffset]);
 			*surface = glmSurface.metadata;
-			surface->ofsHeader = &buffer[0] - reinterpret_cast<char *>(surface);
+			surface->ofsHeader = reinterpret_cast<const char *>(&header) - reinterpret_cast<char *>(surface);
 			surfaceOffset += sizeof (mdxmSurface_t);
 
 			mdxmTriangle_t *triangles = reinterpret_cast<mdxmTriangle_t *>(&surfaceData[surfaceOffset]);
@@ -758,55 +632,219 @@ void MakeGLMFile ( FbxScene& scene, FbxNode& root )
 		lodBasePtr += lodOffset;
 	}
 
+	return true;
+}
+
+bool WriteSurfaceHierarchyData ( const mdxmHeader_t& header,
+									const SurfaceHierarchyList& surfaceHierarchy,
+									int *hierarchyOffsets,
+									mdxmSurfHierarchy_t *hierarchy )
+{
+	char *hierarchyOffsetsBasePtr = reinterpret_cast<char *>(hierarchyOffsets);
+	unsigned hierarchyOffset = sizeof (int) * header.numSurfaces;
+
+	for ( int i = 0; i < header.numSurfaces; i++ )
+	{
+		const GLMSurfaceHierarchy& surface = surfaceHierarchy[i];
+
+		hierarchyOffsets[i] = hierarchyOffset;
+
+		std::memcpy (hierarchy, surface.metadata, surface.metadataSize);
+
+		hierarchyOffset += surface.metadataSize;
+		hierarchy = reinterpret_cast<mdxmSurfHierarchy_t *>(&hierarchyOffsetsBasePtr[hierarchyOffset]);
+	}
+
+	return true;
+}
+
+bool WriteDataToFile ( const std::string& path, const char *begin, const char *end )
+{
+	std::ofstream file (path.c_str(), std::ios::binary);
+	if ( !file )
+	{
+		return false;
+	}
+
+	file.write (begin, end - begin);
+
+	return true;
+}
+
+void PrintModelStatistics ( const std::vector<ModelDetailData>& modelDetails )
+{
+	std::cout << "..." << modelDetails.size() << " LoDs\n";
+	for ( const auto modelData : modelDetails )
+	{
+		unsigned numVerts = 0u;
+		unsigned numTriangles = 0u;
+
+		std::cout << "......LoD " << modelData.lod << ": ";
+		for ( const auto surface : modelData.surfaces )
+		{
+			numVerts += surface.metadata.numVerts;
+			numTriangles += surface.metadata.numTriangles;
+		}
+
+		std::cout << numVerts << " vertices, " << numTriangles << " triangles\n";
+	}
+}
+
+bool MakeGLMFile ( FbxScene& scene, FbxNode& root, const std::string& outputPath )
+{
+	FbxNode *meshRoot = GetRootMesh (root);
+
+	// Create surface hierarchy
+	SurfaceHierarchyList surfaceHierarchy (CreateSurfaceHierarchy (*meshRoot));
+
+	std::cout << "..." << surfaceHierarchy.size() << " surfaces\n";
+
+	// Create surface data
+	std::vector<ModelDetailData> modelDetails (GetModelData (scene, surfaceHierarchy));
+
+	PrintModelStatistics (modelDetails);
+
+	std::size_t filesize = CalculateGLMFileSize (surfaceHierarchy, modelDetails);
+	
+	// Write data
+	std::vector<char> buffer (filesize, '\0');
+
+	int hierarchyOffsetsBase = sizeof (mdxmHeader_t);
+	int hierarchyBase = hierarchyOffsetsBase + sizeof (int) * surfaceHierarchy.size();
+	int lodBase = hierarchyOffsetsBase + CalculateSurfaceHierarchySize (surfaceHierarchy);
+
+	std::string outputFile (GetFilename (outputPath));
+
+	mdxmHeader_t *header = reinterpret_cast<mdxmHeader_t *>(&buffer[0]);
+	header->ident = MDXM_IDENT;
+	header->version = MDXM_VERSION;
+	CopyString (header->name, outputFile.c_str(), sizeof (header->name));
+	CopyString (header->animName, "*default", sizeof (header->animName));
+	header->animIndex = -1;
+	header->numBones = 1;
+	header->numLODs = static_cast<int>(modelDetails.size());
+	header->ofsLODs = lodBase;
+	header->numSurfaces = static_cast<int>(surfaceHierarchy.size());
+	header->ofsSurfHierarchy = hierarchyBase;
+	header->ofsEnd = filesize;
+
+	// Surface offsets and hierarchy
+	int *hierarchyOffsets = reinterpret_cast<int *>(&buffer[hierarchyOffsetsBase]);
+	mdxmSurfHierarchy_t *hierarchy = reinterpret_cast<mdxmSurfHierarchy_t *>(&hierarchyOffsets[header->numSurfaces]);
+
+	if ( !WriteSurfaceHierarchyData (*header, surfaceHierarchy, hierarchyOffsets, hierarchy) )
+	{
+		std::cerr << "Failed to write surface hierarchy data to file.\n";
+
+		return false;
+	}
+
+	// LODs
+	if ( !WriteLoDData (*header, &buffer[lodBase], modelDetails) )
+	{
+		std::cerr << "Failed to write vertex data to file.\n";
+
+		return false;
+	}
+
 	for ( const auto& surface : surfaceHierarchy )
 	{
 		char *data = reinterpret_cast<char *>(surface.metadata);
 		delete [] data;
 	}
 
-	std::ofstream file ("model.glm", std::ios::binary);
-	if ( !file )
+	if ( !WriteDataToFile (outputPath, buffer.data(), buffer.data() + buffer.size()) )
 	{
-		std::cerr << "Failed to create file model.glm\n";
+		return false;
 	}
 
-	file.write (buffer.data(), buffer.size());
+	return true;
+}
+
+void PrintUsage ( const std::string& applicationName )
+{
+	std::cout << "Usage: " << applicationName << " [-o <GLM file>] <FBX file>\n\n";
 }
 
 int main ( int argc, char *argv[] )
 {
-	FbxManager *fbxManager = FbxManager::Create();
+	std::vector<std::string> args (argv, argv + argc);
+	if ( args.size()  == 1 )
+	{
+		PrintUsage (args[0]);
+		return 1;
+	}
 
+	std::string outputPath ("model.glm");
+	unsigned i;
+	for ( i = 1; i < args.size(); i++ )
+	{
+		if ( args[i].compare ("-o") == 0 )
+		{
+			i++;
+			if ( args.size() > i )
+			{
+				outputPath = args[i];
+
+				continue;
+			}
+			else
+			{
+				PrintUsage (args[0]);
+
+				return 1;
+			}
+		}
+		else
+		{
+			break;
+		}
+	}
+
+	if ( i == args.size() )
+	{
+		PrintUsage (args[0]);
+
+		return 1;
+	}
+
+	std::string modelPath (args[i]);
+	std::cout << "Converting " << modelPath << " to GLM.\n";
+
+	FbxManager *fbxManager = FbxManager::Create();
 	FbxIOSettings *ios = FbxIOSettings::Create (fbxManager, IOSROOT);
 	fbxManager->SetIOSettings (ios);
 
 	FbxImporter *importer = FbxImporter::Create (fbxManager, "");
-	const char *modelPath = "model.fbx";
-	if ( argc > 1 )
-	{
-		modelPath = argv[1];
-		std::cout << "Converting " << modelPath << '\n';
-	}
 
-	bool importStatus = importer->Initialize (modelPath, -1, fbxManager->GetIOSettings());
-	if ( !importStatus )
+	if ( !importer->Initialize (modelPath.c_str(), -1, fbxManager->GetIOSettings()) )
 	{
-		std::cout << "Call to FbxImporter::Initialize() failed.\n";
+		importer->Destroy();
+		std::cerr << "Failed to import " << modelPath << ".\n";
 
 		return 1;
 	}
 
 	FbxScene *scene = FbxScene::Create (fbxManager, "model");
 	importer->Import (scene);
+	importer->Destroy();
 
 	FbxNode *root = scene->GetRootNode();
 	if ( root == nullptr )
 	{
-		std::cout << "No root node :(\n";
+		std::cerr << "No root node :(\n";
+
 		return 1;
 	}
 
-	MakeGLMFile (*scene, *root);
+	if ( !MakeGLMFile (*scene, *root, outputPath) )
+	{
+		std::cerr << "Failed to create GLM file " << outputPath << ".\n";
 
-	importer->Destroy();
+		return 1;
+	}
+
+	std::cout << "GLM file has been written to " << outputPath << ".\n";
+
+	return 0;
 }
