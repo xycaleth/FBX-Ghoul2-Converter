@@ -298,13 +298,15 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 	std::map<VertexId, int> uniqueVerticesMap;
 	std::vector<Vertex> uniqueVertices;
 
+	std::cout << lod << '\n';
 	for ( std::size_t i = 0; i < hierarchy.size(); i++ )
 	{
 		const mdxmSurfHierarchy_t& surfaceHierarchy = *hierarchy[i].metadata;
 		mdxmSurface_t& metadata = data.surfaces[i].metadata;
 
-		FbxNode& fbxNode = *nodes[i];
-		FbxMesh& mesh = *GetFBXMesh (fbxNode);
+		FbxNode& node = *nodes[i];
+		FbxMesh& mesh = *GetFBXMesh (node);
+		std::cout << "- " << node.GetName() << '\n';
 
 		const int *indices = mesh.GetPolygonVertices();
 		const FbxVector4 *positions = mesh.GetControlPoints();
@@ -353,7 +355,7 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 		}
 
 		FbxAMatrix globalMatrix;
-		globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&fbxNode);
+		globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&node);
 
 		if ( uvs == nullptr )
 		{
@@ -501,6 +503,39 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 	return data;
 }
 
+void CreateSurfaceNameMapping ( const std::vector<FbxNode *>& nodes, std::map<std::string, int>& mapping )
+{
+	for ( unsigned i = 0u, count = nodes.size(); i < count; i++ )
+	{
+		mapping[nodes[i]->GetName()] = i;
+	}
+}
+
+bool ReorderSurfacesToLOD0 ( std::vector<FbxNode *>& nodes, const std::map<std::string, int>& nameRemap )
+{
+	std::vector<FbxNode *> reorderedNodes (nodes.size(), nullptr);
+
+	for ( unsigned i = 0u, count = nodes.size(); i < count; i++ )
+	{
+		const char *nodeName = nodes[i]->GetName();
+		std::string surfaceName (nodeName, nodeName + strlen (nodeName) - 2);
+
+		std::cout << surfaceName << '\n';
+		std::map<std::string, int>::const_iterator it = nameRemap.find (surfaceName);
+		if ( it == nameRemap.end() )
+		{
+			std::cerr << "LOD doesn't have surface " << surfaceName << '\n';
+			return false;
+		}
+
+		reorderedNodes[it->second] = nodes[i];
+	}
+
+	nodes = reorderedNodes;
+
+	return true;
+}
+
 void LinearizeSurfacesHelper ( FbxNode& root, std::vector<FbxNode *>& nodes )
 {
 	nodes.push_back (&root);
@@ -530,9 +565,24 @@ std::vector<ModelDetailData> GetModelData ( FbxScene& scene, std::vector<FbxNode
 
 	detailData.reserve (lodCount);
 
-	for ( int i = 0; i < lodCount; i++ )
+	std::map<std::string, int> nameMapping;
+
+	LinearizeSurfaces (*modelRoots[0], nodes);
+	CreateSurfaceNameMapping (nodes, nameMapping);
+
+	detailData.push_back (CreateModelLod (scene, hierarchy, 0, nodes));
+
+	for ( int i = 1; i < lodCount; i++ )
 	{
 		LinearizeSurfaces (*modelRoots[i], nodes);
+
+		if ( !ReorderSurfacesToLOD0 (nodes, nameMapping) )
+		{
+			std::cerr << "Failed to create vertex data for LOD " << i << '\n';
+
+			detailData.push_back (ModelDetailData());
+			continue;
+		}
 
 		detailData.push_back (CreateModelLod (scene, hierarchy, i, nodes));
 	}
