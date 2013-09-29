@@ -183,6 +183,20 @@ struct Vertex
 	mdxmVertexTexcoord_t texcoord;
 };
 
+void VectorNormalize ( float *v )
+{
+	float dot = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+	if ( dot < 1e-6f )
+	{
+		return;
+	}
+
+	float len = 1.0f / std::sqrt (dot);
+	v[0] *= len;
+	v[1] *= len;
+	v[2] *= len;
+}
+
 void CopyVertexData ( Vertex& vertex, const FbxAMatrix& globalMatrix, const FbxVector4& position, const FbxVector4& normal )
 {
 	FbxVector4 positionWS = globalMatrix.MultT (position);
@@ -190,10 +204,11 @@ void CopyVertexData ( Vertex& vertex, const FbxAMatrix& globalMatrix, const FbxV
 	vertex.positionAndNormal.position[1] = static_cast<float>(positionWS[1]);
 	vertex.positionAndNormal.position[2] = static_cast<float>(positionWS[2]);
 
-	FbxVector4 normalWS = globalMatrix.MultT (normal);
+	FbxVector4 normalWS = globalMatrix.MultR (normal);
 	vertex.positionAndNormal.normal[0] = static_cast<float>(normalWS[0]);
 	vertex.positionAndNormal.normal[1] = static_cast<float>(normalWS[1]);
 	vertex.positionAndNormal.normal[2] = static_cast<float>(normalWS[2]);
+	VectorNormalize (vertex.positionAndNormal.normal);
 
 	vertex.positionAndNormal.numWeightsAndBoneIndexes = 0u;
 	vertex.positionAndNormal.boneWeightings[0] = 255u;
@@ -298,7 +313,6 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 	std::map<VertexId, int> uniqueVerticesMap;
 	std::vector<Vertex> uniqueVertices;
 
-	std::cout << lod << '\n';
 	for ( std::size_t i = 0; i < hierarchy.size(); i++ )
 	{
 		const mdxmSurfHierarchy_t& surfaceHierarchy = *hierarchy[i].metadata;
@@ -306,7 +320,6 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 
 		FbxNode& node = *nodes[i];
 		FbxMesh& mesh = *GetFBXMesh (node);
-		std::cout << "- " << node.GetName() << '\n';
 
 		const int *indices = mesh.GetPolygonVertices();
 		const FbxVector4 *positions = mesh.GetControlPoints();
@@ -416,8 +429,8 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 				for ( int j = 0, count = triangles.size(); j < count; j++, index += 3 )
 				{
 					triangles[j].indexes[0] = index[0];
-					triangles[j].indexes[1] = index[1];
-					triangles[j].indexes[2] = index[2];
+					triangles[j].indexes[1] = index[2];
+					triangles[j].indexes[2] = index[1];
 				}
 			}
 			else
@@ -457,8 +470,8 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 					}
 
 					triangles[tri].indexes[0] = triangle[0];
-					triangles[tri].indexes[1] = triangle[1];
-					triangles[tri].indexes[2] = triangle[2];
+					triangles[tri].indexes[1] = triangle[2];
+					triangles[tri].indexes[2] = triangle[1];
 				}
 
 				numVerts = index;
@@ -520,7 +533,6 @@ bool ReorderSurfacesToLOD0 ( std::vector<FbxNode *>& nodes, const std::map<std::
 		const char *nodeName = nodes[i]->GetName();
 		std::string surfaceName (nodeName, nodeName + strlen (nodeName) - 2);
 
-		std::cout << surfaceName << '\n';
 		std::map<std::string, int>::const_iterator it = nameRemap.find (surfaceName);
 		if ( it == nameRemap.end() )
 		{
