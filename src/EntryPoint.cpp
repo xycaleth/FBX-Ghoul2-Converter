@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fbxsdk.h>
 #include <map>
+#include <string>
 #include <vector>
 
 #include "GLM.h"
