@@ -1,3 +1,4 @@
+#include <array>
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -39,26 +40,6 @@ FbxMesh *GetFBXMesh ( FbxNode& node )
 	return nullptr;
 }
 
-FbxNode *GetRootNode ( FbxNode& root, unsigned int lod )
-{
-	if ( lod >= static_cast<unsigned int>(root.GetChildCount() - 1) )
-	{
-		return nullptr;
-	}
-
-	FbxNode *child = root.GetChild (1u + lod);
-	FbxNodeAttribute *defaultAttribute = child->GetNodeAttribute();
-
-	if ( defaultAttribute == nullptr ||
-			defaultAttribute->GetAttributeType() != FbxNodeAttribute::eMesh )
-	{
-		return nullptr;
-	}
-
-	return child;
-}
-
-
 char *CopyString ( char *destination, const char *source, std::size_t destinationSize )
 {
 	std::strncpy (destination, source, destinationSize - 1);
@@ -91,8 +72,17 @@ int AddToHierarchy (
 	std::transform (hierarchyNode->name, hierarchyNode->name + sizeof (hierarchyNode->name),
 						hierarchyNode->name, []( char c ) { return std::tolower (c); });
 
-	hierarchyNode->flags = 0;
 	hierarchyNode->shader[0] = '\0';
+	if (node.GetSrcObjectCount (FbxSurfacePhong::ClassId) > 0)
+	{
+		FbxSurfacePhong *material = static_cast<FbxSurfacePhong *>(node.GetSrcObject (FbxSurfacePhong::ClassId));
+		if (material->Diffuse.GetSrcObjectCount (FbxFileTexture::ClassId) > 0)
+		{
+			CopyString (hierarchyNode->shader, material->GetInitialName(), sizeof (hierarchyNode->shader));
+		}
+	}
+
+	hierarchyNode->flags = 0;
 	hierarchyNode->shaderIndex = 0;
 	hierarchyNode->parentIndex = parentIndex;
 	hierarchyNode->numChildren = numChildren;
@@ -198,7 +188,19 @@ void VectorNormalize ( float *v )
 	v[2] *= len;
 }
 
-void CopyVertexData ( Vertex& vertex, const FbxAMatrix& globalMatrix, const FbxVector4& position, const FbxVector4& normal )
+struct Weights
+{
+	std::array<std::string, 4> influencers;
+	std::array<float, 4> weights;
+	std::size_t count;
+};
+
+void CopyVertexData (
+	Vertex& vertex,
+	const FbxAMatrix& globalMatrix,
+	const FbxVector4& position,
+	const FbxVector4& normal,
+	const Weights& weights )
 {
 	FbxVector4 positionWS = globalMatrix.MultT (position);
 	vertex.positionAndNormal.position[0] = static_cast<float>(positionWS[0]);
@@ -212,10 +214,15 @@ void CopyVertexData ( Vertex& vertex, const FbxAMatrix& globalMatrix, const FbxV
 	VectorNormalize (vertex.positionAndNormal.normal);
 
 	vertex.positionAndNormal.numWeightsAndBoneIndexes = 0u;
-	vertex.positionAndNormal.boneWeightings[0] = 255u;
-	vertex.positionAndNormal.boneWeightings[1] = 0u;
-	vertex.positionAndNormal.boneWeightings[2] = 0u;
-	vertex.positionAndNormal.boneWeightings[3] = 0u;
+	for ( unsigned i = 0; i < weights.count; i++ )
+	{
+		vertex.positionAndNormal.boneWeightings[i] = static_cast<unsigned char>(weights.weights[i] * 255u);
+	}
+
+	for ( unsigned i = weights.count; i < 4u; i++ )
+	{
+		vertex.positionAndNormal.boneWeightings[i] = 0u;
+	}
 }
 
 std::size_t CalculateHeaderSize()
@@ -313,6 +320,7 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 	// allocation and freeing of memory.
 	std::map<VertexId, int> uniqueVerticesMap;
 	std::vector<Vertex> uniqueVertices;
+	std::vector<Weights> vertexWeights;
 
 	for ( std::size_t i = 0; i < hierarchy.size(); i++ )
 	{
@@ -356,6 +364,43 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 			}
 		}
 
+		vertexWeights.resize (numPositions);
+		for ( auto& weight : vertexWeights )
+		{
+			weight.count = 0u;
+		}
+
+		FbxSkin *deformer = static_cast<FbxSkin *>(mesh.GetDeformer(0, FbxDeformer::eSkin));
+		for ( int j = 0; j < deformer->GetClusterCount(); j++ )
+		{
+			FbxCluster *cluster = deformer->GetCluster (j);
+			int weightCount = cluster->GetControlPointIndicesCount();
+			double *weights = cluster->GetControlPointWeights();
+			int *weightIndices = cluster->GetControlPointIndices();
+
+			FbxNode *link = cluster->GetLink();
+			std::string influencer = link->GetName();
+
+			for ( int k = 0; k < weightCount; k++ )
+			{
+				Weights& w = vertexWeights[weightIndices[k]];
+				w.weights[w.count] = static_cast<float>(weights[k]);
+				w.influencers[w.count] = influencer;
+
+				w.count++;
+			}
+		}
+
+		for ( unsigned j = 0; j < numPositions; j++ )
+		{
+			std::cout << "Pos " << j << ":";
+			for ( unsigned k = 0; k < vertexWeights[j].count; k++ )
+			{
+				std::cout << ' ' << vertexWeights[j].influencers[k] <<  " (" << vertexWeights[j].weights[k] << ')';
+			}
+			std::cout << '\n';
+		}
+
 		int numTriangles = mesh.GetPolygonCount();
 		int numVerts = numUniquePoints;
 
@@ -383,7 +428,7 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 			{
 				Vertex vertex;
 
-				CopyVertexData (vertex, globalMatrix, positions[order[j]], normals[order[j]]);
+				CopyVertexData (vertex, globalMatrix, positions[order[j]], normals[order[j]], vertexWeights[order[j]]);
 
 				// Not strictly necessary but makes things cleaner in the output file.
 				vertex.texcoord.st[0] = 0.0f;
@@ -418,7 +463,7 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 
 					vertex.filled = true;
 
-					CopyVertexData (vertex, globalMatrix, positions[indices[j]], normals[indices[j]]);
+					CopyVertexData (vertex, globalMatrix, positions[indices[j]], normals[indices[j]], vertexWeights[indices[j]]);
 
 					FbxVector2 tc = uvs->GetAt (uvIndices[j]);
 					vertex.texcoord.st[0] = static_cast<float>(tc[0]);
@@ -453,7 +498,7 @@ ModelDetailData CreateModelLod ( FbxScene& scene, const SurfaceHierarchyList& hi
 							Vertex v;
 
 							uniqueVerticesMap.insert (std::make_pair (id, index));
-							CopyVertexData (v, globalMatrix, positions[id.positionId], normals[id.positionId]);
+							CopyVertexData (v, globalMatrix, positions[id.positionId], normals[id.positionId], vertexWeights[id.positionId]);
 
 							FbxVector2 tc = uvs->GetAt (id.texcoordId);
 							v.texcoord.st[0] = static_cast<float>(tc[0]);
@@ -630,7 +675,7 @@ bool WriteLODData ( const mdxmHeader_t& header, char *buffer, const std::vector<
 		char *surfaceData = reinterpret_cast<char *>(surfaceOffsets);
 		int surfaceOffset = sizeof (int) * header.numSurfaces;
 
-		for ( unsigned i = 0; i < header.numSurfaces; i++ )
+		for ( int i = 0; i < header.numSurfaces; i++ )
 		{
 			const GLMSurface& glmSurface = modelDetail.surfaces[i];
 
@@ -798,9 +843,29 @@ void PrintUsage ( const std::string& applicationName )
 	std::cout << "Usage: " << applicationName << " [-o <GLM file>] <FBX file>\n\n";
 }
 
-bool CompareFbxNodeName ( const FbxNode* a, const FbxNode* b )
+bool StartsWith ( const std::string& str, const std::string& substr )
 {
-	return std::strcmp (a->GetName(), b->GetName()) < 0;
+	return substr.compare (0, substr.length(), str) == 0;
+}
+
+std::vector<FbxNode *> GetLodRootModels ( FbxNode& sceneRoot )
+{
+	// Slightly over size it, but no matter...
+	std::vector<FbxNode *> roots;
+	roots.reserve (sceneRoot.GetChildCount());
+
+	// Get all the meshes
+	for ( int i = 0; i < sceneRoot.GetChildCount(); i++ )
+	{
+		FbxNode *child = sceneRoot.GetChild (i);
+
+		if ( child->GetNodeAttribute()->GetAttributeType() == FbxNodeAttribute::eMesh )
+		{
+			roots.push_back (child);
+		}
+	}
+
+	return roots;
 }
 
 int main ( int argc, char *argv[] )
@@ -874,13 +939,9 @@ int main ( int argc, char *argv[] )
 		return 1;
 	}
 
-	std::vector<FbxNode *> modelRoots (root->GetChildCount() - 1);
-	for ( i = 1u; i < static_cast<unsigned>(root->GetChildCount()); i++ )
-	{
-		modelRoots[i - 1u] = root->GetChild (i);
-	}
-
-	std::sort (modelRoots.begin(), modelRoots.end(), CompareFbxNodeName);
+	std::vector<FbxNode *> modelRoots (GetLodRootModels (*root));
+	std::sort (modelRoots.begin(), modelRoots.end(),
+		[]( const FbxNode *a, const FbxNode *b ) { return std::strcmp (a->GetName(), b->GetName()) < 0; });
 
 	if ( !MakeGLMFile (*scene, modelRoots, outputPath) )
 	{
