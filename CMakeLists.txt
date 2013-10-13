@@ -3,7 +3,12 @@ project("FBX-G2 Converter")
 
 set(SOURCE_FILES
 	"src/EntryPoint.cpp"
-)
+	)
+
+set(HEADER_FILES
+	"src/GLA.h"
+	"src/GLM.h"
+	)
 
 if(NOT FBX_ROOT)
 	if(APPLE)
