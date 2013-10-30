@@ -41,5 +41,5 @@ endif()
 
 include_directories(${INCLUDE_PATH})
 
-add_executable(fbx2ghoul2 ${SOURCE_FILES})
+add_executable(fbx2ghoul2 ${SOURCE_FILES} ${HEADER_FILES})
 target_link_libraries(fbx2ghoul2 ${LINK_LIBRARIES})

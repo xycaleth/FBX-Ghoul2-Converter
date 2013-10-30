@@ -39,4 +39,11 @@ struct mdxaSkel_t
 	int children[1];
 };
 
+struct Skeleton
+{
+	std::string name;
+	std::map<std::string, int> boneNamesToIndex;
+	float scale;
+};
+
 #endif

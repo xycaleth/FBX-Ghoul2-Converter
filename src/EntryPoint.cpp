@@ -202,12 +202,13 @@ void CopyVertexData (
 		const FbxVector4& position,
 		const FbxVector4& normal,
 		const Weights& weights,
-		const std::map<std::string, int>& boneIndexes )
+		const std::map<std::string, int>& boneIndexes,
+		float modelScale )
 {
 	FbxVector4 positionWS = globalMatrix.MultT (position);
-	vertex.positionAndNormal.position[0] = static_cast<float>(positionWS[0]);
-	vertex.positionAndNormal.position[1] = static_cast<float>(positionWS[1]);
-	vertex.positionAndNormal.position[2] = static_cast<float>(positionWS[2]);
+	vertex.positionAndNormal.position[0] = modelScale * static_cast<float>(positionWS[0]);
+	vertex.positionAndNormal.position[1] = modelScale * static_cast<float>(positionWS[1]);
+	vertex.positionAndNormal.position[2] = modelScale * static_cast<float>(positionWS[2]);
 
 	FbxVector4 normalWS = globalMatrix.MultR (normal);
 	vertex.positionAndNormal.normal[0] = static_cast<float>(normalWS[0]);
@@ -215,26 +216,29 @@ void CopyVertexData (
 	vertex.positionAndNormal.normal[2] = static_cast<float>(normalWS[2]);
 	VectorNormalize (vertex.positionAndNormal.normal);
 
+	assert (weights.count <= 4);
 	vertex.positionAndNormal.numWeightsAndBoneIndexes = ((weights.count - 1) & 0x2) << 30;
 	int bitOffset = 0;
 	int overflowBitOffset = 20;
+
 	for ( unsigned i = 0; i < weights.count; i++ )
 	{
 		// index
 		vertex.positionAndNormal.numWeightsAndBoneIndexes |= (boneIndexes.at (weights.influencers[i]) & 0x1f) << bitOffset;
-
-		// overflow of index just in case
-		vertex.positionAndNormal.numWeightsAndBoneIndexes |= (boneIndexes.at (weights.influencers[i]) & 0x30) << overflowBitOffset;
-		
 		bitOffset += 5;
+
+		// overflow of weight
+		int weight = static_cast<int>(weights.weights[i] * 1023);
+
+		vertex.positionAndNormal.numWeightsAndBoneIndexes |= (weight & 0x300) << overflowBitOffset;
 		overflowBitOffset += 2;
 
-		vertex.positionAndNormal.boneWeightings[i] = static_cast<unsigned char>(weights.weights[i] * 255u);
+		vertex.positionAndNormal.boneWeightings[i] = static_cast<unsigned char>(weight & 0xff);
 	}
 
-	for ( unsigned i = weights.count; i < 4u; i++ )
+	for ( unsigned i = weights.count; i < 4; i++ )
 	{
-		vertex.positionAndNormal.boneWeightings[i] = 0u;
+		vertex.positionAndNormal.boneWeightings[i] = 0;
 	}
 }
 
@@ -261,7 +265,7 @@ std::size_t CalculateSurfaceHierarchySize ( const SurfaceHierarchyList& hierarch
 
 std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface )
 {
-	std::size_t filesize = 0u;
+	std::size_t filesize = 0;
 
 	// Surface data
 	filesize += sizeof (mdxmSurface_t);
@@ -283,7 +287,7 @@ std::size_t CalculateSurfaceSize ( const mdxmSurface_t& surface )
 
 std::size_t CalculateLODSize ( const ModelDetailData& modelDetail )
 {
-	std::size_t filesize = 0u;
+	std::size_t filesize = 0;
 
 	// LOD data
 	const std::vector<GLMSurface>& surfaces = modelDetail.surfaces;
@@ -304,7 +308,7 @@ std::size_t CalculateLODSize ( const ModelDetailData& modelDetail )
 
 std::size_t CalculateLODSize ( const std::vector<ModelDetailData>& modelData )
 {
-	std::size_t filesize = 0u;
+	std::size_t filesize = 0;
 
 	for ( const auto& modelDetail : modelData )
 	{
@@ -327,7 +331,7 @@ ModelDetailData CreateModelLod (
 		FbxScene& scene,
 		const SurfaceHierarchyList& hierarchy,
 		int lod,
-		const std::map<std::string, int>& boneNames,
+		const Skeleton *skeleton,
 		std::vector<FbxNode *>& nodes )
 {
 	ModelDetailData data;
@@ -341,6 +345,8 @@ ModelDetailData CreateModelLod (
 	std::vector<Weights> vertexWeights;
 	std::set<std::string> referencedBoneNamesSet;
 	std::map<std::string, int> referencedBoneNamesIndex;
+
+	float scale = skeleton != nullptr ? skeleton->scale : 1.0f;
 
 	for ( std::size_t i = 0; i < hierarchy.size(); i++ )
 	{
@@ -390,7 +396,7 @@ ModelDetailData CreateModelLod (
 		vertexWeights.resize (numPositions);
 		for ( auto& weight : vertexWeights )
 		{
-			weight.count = 0u;
+			weight.count = 0;
 		}
 
 		FbxSkin *deformer = static_cast<FbxSkin *>(mesh.GetDeformer(0, FbxDeformer::eSkin));
@@ -413,6 +419,7 @@ ModelDetailData CreateModelLod (
 				w.influencers[w.count] = influencer;
 
 				w.count++;
+				assert (w.count <= 4);
 			}
 		}
 
@@ -456,7 +463,8 @@ ModelDetailData CreateModelLod (
 						positions[order[j]],
 						normals[order[j]],
 						vertexWeights[order[j]],
-						referencedBoneNamesIndex);
+						referencedBoneNamesIndex,
+						scale);
 
 				// Not strictly necessary but makes things cleaner in the output file.
 				vertex.texcoord.st[0] = 0.0f;
@@ -496,7 +504,8 @@ ModelDetailData CreateModelLod (
 							positions[indices[j]],
 							normals[indices[j]],
 							vertexWeights[indices[j]],
-							referencedBoneNamesIndex);
+							referencedBoneNamesIndex,
+							scale);
 
 					FbxVector2 tc = uvs->GetAt (uvIndices[j]);
 					vertex.texcoord.st[0] = static_cast<float>(tc[0]);
@@ -536,7 +545,8 @@ ModelDetailData CreateModelLod (
 									positions[id.positionId],
 									normals[id.positionId],
 									vertexWeights[id.positionId],
-									referencedBoneNamesIndex);
+									referencedBoneNamesIndex,
+									scale);
 
 							FbxVector2 tc = uvs->GetAt (id.texcoordId);
 							v.texcoord.st[0] = static_cast<float>(tc[0]);
@@ -576,8 +586,22 @@ ModelDetailData CreateModelLod (
 
 		// Bone references
 		std::vector<int>& boneReferences = data.surfaces[i].boneReferences;
-		boneReferences.resize (1);
-		boneReferences[0] = 0;
+		if ( referencedBoneNamesSet.empty() || skeleton == nullptr )
+		{
+			boneReferences.resize (1);
+			boneReferences[0] = 0;
+		}
+		else
+		{
+			boneReferences.resize (referencedBoneNamesSet.size());
+
+			std::cout << surfaceHierarchy.name << " references " << boneReferences.size() << " bones\n";
+			for ( const auto& referencedBone : referencedBoneNamesIndex )
+			{
+				boneReferences[referencedBone.second] = skeleton->boneNamesToIndex.at (referencedBone.first);
+				std::cout << '[' << referencedBone.second << "] " << referencedBone.first << " (" << boneReferences[referencedBone.second] << ")\n";
+			}
+		}
 
 		int ofsBoneReferences = 0;
 		ofsBoneReferences += sizeof (mdxmSurface_t);
@@ -592,7 +616,7 @@ ModelDetailData CreateModelLod (
 		metadata.numTriangles = numTriangles;
 		metadata.numVerts = numVerts;
 		metadata.ofsVerts = metadata.ofsTriangles + sizeof (mdxmTriangle_t) * metadata.numTriangles;
-		metadata.numBoneReferences = 1;
+		metadata.numBoneReferences = static_cast<int>(boneReferences.size());
 		metadata.ofsBoneReferences = ofsBoneReferences;
 		metadata.ofsEnd = CalculateSurfaceSize (metadata);
 	}
@@ -602,7 +626,7 @@ ModelDetailData CreateModelLod (
 
 void CreateSurfaceNameMapping ( const std::vector<FbxNode *>& nodes, std::map<std::string, int>& mapping )
 {
-	for ( unsigned i = 0u, count = nodes.size(); i < count; i++ )
+	for ( unsigned i = 0, count = nodes.size(); i < count; i++ )
 	{
 		mapping[nodes[i]->GetName()] = i;
 	}
@@ -612,7 +636,7 @@ bool ReorderSurfacesToLOD0 ( std::vector<FbxNode *>& nodes, const std::map<std::
 {
 	std::vector<FbxNode *> reorderedNodes (nodes.size(), nullptr);
 
-	for ( unsigned i = 0u, count = nodes.size(); i < count; i++ )
+	for ( unsigned i = 0, count = nodes.size(); i < count; i++ )
 	{
 		const char *nodeName = nodes[i]->GetName();
 		std::string surfaceName (nodeName, nodeName + strlen (nodeName) - 2);
@@ -651,7 +675,7 @@ void LinearizeSurfaces ( FbxNode& root, std::vector<FbxNode *>& nodes )
 std::vector<ModelDetailData> GetModelData (
 		FbxScene& scene,
 		std::vector<FbxNode *>& modelRoots,
-		const std::map<std::string, int>& boneNames,
+		const Skeleton *skeleton,
 		const SurfaceHierarchyList& hierarchy )
 {
 	std::vector<ModelDetailData> detailData;
@@ -670,7 +694,7 @@ std::vector<ModelDetailData> GetModelData (
 	LinearizeSurfaces (*modelRoots[0], nodes);
 	CreateSurfaceNameMapping (nodes, nameMapping);
 
-	detailData.push_back (CreateModelLod (scene, hierarchy, 0, boneNames, nodes));
+	detailData.push_back (CreateModelLod (scene, hierarchy, 0, skeleton, nodes));
 
 	for ( int i = 1; i < lodCount; i++ )
 	{
@@ -685,7 +709,7 @@ std::vector<ModelDetailData> GetModelData (
 			continue;
 		}
 
-		detailData.push_back (CreateModelLod (scene, hierarchy, i, boneNames, nodes));
+		detailData.push_back (CreateModelLod (scene, hierarchy, i, skeleton, nodes));
 	}
 
 	return detailData;
@@ -794,8 +818,8 @@ void PrintModelStatistics ( const std::vector<ModelDetailData>& modelDetails )
 	std::cout << "..." << modelDetails.size() << " LODs\n";
 	for ( const auto modelData : modelDetails )
 	{
-		unsigned numVerts = 0u;
-		unsigned numTriangles = 0u;
+		unsigned numVerts = 0;
+		unsigned numTriangles = 0;
 
 		std::cout << "......LOD " << modelData.lod << ": ";
 		for ( const auto surface : modelData.surfaces )
@@ -811,7 +835,7 @@ void PrintModelStatistics ( const std::vector<ModelDetailData>& modelDetails )
 bool MakeGLMFile (
 		FbxScene& scene,
 		std::vector<FbxNode *>& modelRoots,
-		const std::map<std::string, int>& boneNames,
+		const Skeleton *skeleton,
 		const std::string& outputPath )
 {
 	if ( modelRoots.empty() )
@@ -825,7 +849,7 @@ bool MakeGLMFile (
 	std::cout << "..." << surfaceHierarchy.size() << " surfaces\n";
 
 	// Create surface data
-	std::vector<ModelDetailData> modelDetails (GetModelData (scene, modelRoots, boneNames, surfaceHierarchy));
+	std::vector<ModelDetailData> modelDetails (GetModelData (scene, modelRoots, skeleton, surfaceHierarchy));
 
 	PrintModelStatistics (modelDetails);
 
@@ -844,9 +868,9 @@ bool MakeGLMFile (
 	header->ident = MDXM_IDENT;
 	header->version = MDXM_VERSION;
 	CopyString (header->name, outputFile.c_str(), sizeof (header->name));
-	CopyString (header->animName, "*default", sizeof (header->animName));
+	CopyString (header->animName, ( skeleton == nullptr ) ? "*default" : skeleton->name.c_str(), sizeof (header->animName));
 	header->animIndex = -1;
-	header->numBones = 1;
+	header->numBones = ( skeleton == nullptr ) ? 1 : skeleton->boneNamesToIndex.size();
 	header->numLODs = static_cast<int>(modelDetails.size());
 	header->ofsLODs = lodBase;
 	header->numSurfaces = static_cast<int>(surfaceHierarchy.size());
@@ -924,49 +948,53 @@ bool ReadFile ( const std::string& animationPath, std::vector<char>& buffer )
 		return false;
 	}
 
-	unsigned fileLen;
+	std::streamoff fileLen;
 
 	ifs.seekg (0, std::ios::end);
 	fileLen = ifs.tellg();
 	ifs.seekg (0, std::ios::beg);
 
-	buffer.resize (fileLen);
+	buffer.resize (static_cast<unsigned int>(fileLen));
 	ifs.read (buffer.data(), fileLen);
 
 	return true;
 }
 
-bool LoadGLABones ( const std::string& animationPath, std::map<std::string, int>& bones )
+Skeleton *LoadGLA ( const std::string& animationPath )
 {
 	std::vector<char> buffer;
 	if ( !ReadFile (animationPath, buffer) )
 	{
-		return false;
+		return nullptr;
 	}
 
 	mdxaHeader_t *header = reinterpret_cast<mdxaHeader_t *>(&buffer[0]);
 	if ( header->ident != MDXA_IDENT )
 	{
 		std::cerr << "GLA header is incorrect (expected " << MDXA_IDENT << ", found " << header->ident << '\n';
-		return false;
+		return nullptr;
 	}
 
 	if ( header->version != MDXA_VERSION )
 	{
 		std::cerr << "GLA file has wrong version (expected " << MDXA_VERSION << ", found " << header->version << '\n';
-		return false;
+		return nullptr;
 	}
 
 	char *skelBase = &buffer[sizeof (mdxaHeader_t)];
 	mdxaSkelOffsets_t *offsets = reinterpret_cast<mdxaSkelOffsets_t *>(skelBase);
+	Skeleton *skeleton = new Skeleton;
+
+	skeleton->name = header->name;
+	skeleton->scale = header->scale;
 
 	for ( int i = 0; i < header->numBones; i++ )
 	{
 		mdxaSkel_t *skel = reinterpret_cast<mdxaSkel_t *>(skelBase + offsets->offsets[i]);
-		bones.insert (std::make_pair (skel->name, i));
+		skeleton->boneNamesToIndex.insert (std::make_pair (skel->name, i));
 	}
 
-	return true;
+	return skeleton;
 }
 
 int main ( int argc, char *argv[] )
@@ -1028,11 +1056,12 @@ int main ( int argc, char *argv[] )
 
 	std::string modelPath (args.back());
 	std::cout << "Converting " << modelPath << " to GLM.\n";
-	std::map<std::string, int> bones;
+	Skeleton *skeleton = nullptr;
 
 	if ( !animationFile.empty() )
 	{
-		if ( !LoadGLABones (animationFile, bones) )
+		skeleton = LoadGLA (animationFile);
+		if ( skeleton == nullptr )
 		{
 			return EXIT_FAILURE;
 		}
@@ -1049,6 +1078,8 @@ int main ( int argc, char *argv[] )
 		importer->Destroy();
 		std::cerr << "Failed to import " << modelPath << ".\n";
 
+		delete skeleton;
+
 		return EXIT_FAILURE;
 	}
 
@@ -1061,6 +1092,8 @@ int main ( int argc, char *argv[] )
 	{
 		std::cerr << "No root node :(\n";
 
+		delete skeleton;
+
 		return EXIT_FAILURE;
 	}
 
@@ -1068,9 +1101,11 @@ int main ( int argc, char *argv[] )
 	std::sort (modelRoots.begin(), modelRoots.end(),
 		[]( const FbxNode *a, const FbxNode *b ) { return std::strcmp (a->GetName(), b->GetName()) < 0; });
 
-	if ( !MakeGLMFile (*scene, modelRoots, bones, outputPath) )
+	if ( !MakeGLMFile (*scene, modelRoots, skeleton, outputPath) )
 	{
 		std::cerr << "Failed to create GLM file " << outputPath << ".\n";
+
+		delete skeleton;
 
 		return EXIT_FAILURE;
 	}
