@@ -3,11 +3,14 @@ project("FBX-G2 Converter")
 
 set(SOURCE_FILES
 	"src/EntryPoint.cpp"
+	"src/GLA.cpp"
+	"src/IO.cpp"
 	)
 
 set(HEADER_FILES
 	"src/GLA.h"
 	"src/GLM.h"
+	"src/IO.h"
 	)
 
 if(NOT FBX_ROOT)

@@ -1,6 +1,9 @@
 #ifndef GLA_H
 #define GLA_H
 
+#include <map>
+#include <string>
+
 const int MDXA_IDENT = ('A' << 24) | ('G' << 16) | ('L' << 8) | '2';
 const int MDXA_VERSION = 6;
 
@@ -45,5 +48,7 @@ struct Skeleton
 	std::map<std::string, int> boneNamesToIndex;
 	float scale;
 };
+
+Skeleton *LoadGLA ( const std::string& animationPath );
 
 #endif

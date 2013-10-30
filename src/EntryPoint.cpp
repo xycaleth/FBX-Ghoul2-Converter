@@ -12,21 +12,24 @@
 
 #include "GLA.h"
 #include "GLM.h"
+#include "IO.h"
+
+namespace
+{
 
 FbxMesh *GetFBXMesh ( FbxNodeAttribute& attribute )
 {
 	switch ( attribute.GetAttributeType() )
 	{
-		case FbxNodeAttribute::eMesh:
-			return static_cast<FbxMesh *>(&attribute);
-		default:
-			return nullptr;
+	case FbxNodeAttribute::eMesh:
+		return static_cast<FbxMesh *>(&attribute);
+	default:
+		return nullptr;
 	}
 }
 
 FbxMesh *GetFBXMesh ( FbxNode& node )
 {
-	FbxMesh *mesh = nullptr;
 	for ( int i = 0; i < node.GetNodeAttributeCount(); i++ )
 	{
 		FbxNodeAttribute *attribute = node.GetNodeAttributeByIndex (i);
@@ -71,7 +74,7 @@ int AddToHierarchy (
 		CopyString (hierarchyNode->name, node.GetName(), sizeof (hierarchyNode->name));
 	}
 	std::transform (hierarchyNode->name, hierarchyNode->name + sizeof (hierarchyNode->name),
-						hierarchyNode->name, []( char c ) { return std::tolower (c); });
+		hierarchyNode->name, []( char c ) { return std::tolower (c); });
 
 	hierarchyNode->shader[0] = '\0';
 	if (node.GetSrcObjectCount<FbxSurfacePhong>() > 0)
@@ -124,7 +127,7 @@ int CreateSurfaceHierarchy ( FbxNode& node, SurfaceHierarchyList& hierarchyList,
 	}
 
 	std::copy (childIndices.begin(), childIndices.end(),
-				&hierarchyList[index].metadata->childIndex[0]);
+		&hierarchyList[index].metadata->childIndex[0]);
 
 	return index;
 }
@@ -197,13 +200,13 @@ struct Weights
 };
 
 void CopyVertexData (
-		Vertex& vertex,
-		const FbxAMatrix& globalMatrix,
-		const FbxVector4& position,
-		const FbxVector4& normal,
-		const Weights& weights,
-		const std::map<std::string, int>& boneIndexes,
-		float modelScale )
+	Vertex& vertex,
+	const FbxAMatrix& globalMatrix,
+	const FbxVector4& position,
+	const FbxVector4& normal,
+	const Weights& weights,
+	const std::map<std::string, int>& boneIndexes,
+	float modelScale )
 {
 	FbxVector4 positionWS = globalMatrix.MultT (position);
 	vertex.positionAndNormal.position[0] = modelScale * static_cast<float>(positionWS[0]);
@@ -291,7 +294,7 @@ std::size_t CalculateLODSize ( const ModelDetailData& modelDetail )
 
 	// LOD data
 	const std::vector<GLMSurface>& surfaces = modelDetail.surfaces;
-	
+
 	// Next LOD offset
 	filesize += sizeof (int);
 
@@ -319,20 +322,20 @@ std::size_t CalculateLODSize ( const std::vector<ModelDetailData>& modelData )
 }
 
 std::size_t CalculateGLMFileSize (
-		const SurfaceHierarchyList& hierarchy,
-		const std::vector<ModelDetailData>& modelData )
+	const SurfaceHierarchyList& hierarchy,
+	const std::vector<ModelDetailData>& modelData )
 {
 	return CalculateHeaderSize () + 
-			CalculateSurfaceHierarchySize (hierarchy) +
-			CalculateLODSize (modelData);
+		CalculateSurfaceHierarchySize (hierarchy) +
+		CalculateLODSize (modelData);
 }
 
 ModelDetailData CreateModelLod (
-		FbxScene& scene,
-		const SurfaceHierarchyList& hierarchy,
-		int lod,
-		const Skeleton *skeleton,
-		std::vector<FbxNode *>& nodes )
+	FbxScene& scene,
+	const SurfaceHierarchyList& hierarchy,
+	int lod,
+	const Skeleton *skeleton,
+	std::vector<FbxNode *>& nodes )
 {
 	ModelDetailData data;
 	data.lod = lod;
@@ -449,7 +452,7 @@ ModelDetailData CreateModelLod (
 		if ( uvs == nullptr )
 		{
 			// The only surfaces with no UVs are the tags and the "stupidtriangle" surface.
-			
+
 			// Tags are oriented by taking the last vertex as the origin, and calculating
 			// the different edge lengths. The mid-length edge is taken to be the Y axis,
 			// and shortest to be X axis.
@@ -459,12 +462,12 @@ ModelDetailData CreateModelLod (
 				Vertex vertex;
 
 				CopyVertexData (vertex,
-						globalMatrix,
-						positions[order[j]],
-						normals[order[j]],
-						vertexWeights[order[j]],
-						referencedBoneNamesIndex,
-						scale);
+					globalMatrix,
+					positions[order[j]],
+					normals[order[j]],
+					vertexWeights[order[j]],
+					referencedBoneNamesIndex,
+					scale);
 
 				// Not strictly necessary but makes things cleaner in the output file.
 				vertex.texcoord.st[0] = 0.0f;
@@ -481,7 +484,7 @@ ModelDetailData CreateModelLod (
 		else
 		{
 			assert (uvLayer->GetMappingMode() == FbxLayerElement::eByPolygonVertex &&
-					uvLayer->GetReferenceMode() == FbxLayerElement::eIndexToDirect);
+				uvLayer->GetReferenceMode() == FbxLayerElement::eIndexToDirect);
 
 			FbxLayerElementArrayTemplate<int>& uvIndices = uvLayer->GetIndexArray();
 			if ( numUniquePoints == numPositions )
@@ -500,12 +503,12 @@ ModelDetailData CreateModelLod (
 					vertex.filled = true;
 
 					CopyVertexData (vertex,
-							globalMatrix,
-							positions[indices[j]],
-							normals[indices[j]],
-							vertexWeights[indices[j]],
-							referencedBoneNamesIndex,
-							scale);
+						globalMatrix,
+						positions[indices[j]],
+						normals[indices[j]],
+						vertexWeights[indices[j]],
+						referencedBoneNamesIndex,
+						scale);
 
 					FbxVector2 tc = uvs->GetAt (uvIndices[j]);
 					vertex.texcoord.st[0] = static_cast<float>(tc[0]);
@@ -541,12 +544,12 @@ ModelDetailData CreateModelLod (
 
 							uniqueVerticesMap.insert (std::make_pair (id, index));
 							CopyVertexData (v,
-									globalMatrix,
-									positions[id.positionId],
-									normals[id.positionId],
-									vertexWeights[id.positionId],
-									referencedBoneNamesIndex,
-									scale);
+								globalMatrix,
+								positions[id.positionId],
+								normals[id.positionId],
+								vertexWeights[id.positionId],
+								referencedBoneNamesIndex,
+								scale);
 
 							FbxVector2 tc = uvs->GetAt (id.texcoordId);
 							v.texcoord.st[0] = static_cast<float>(tc[0]);
@@ -594,13 +597,6 @@ ModelDetailData CreateModelLod (
 		else
 		{
 			boneReferences.resize (referencedBoneNamesSet.size());
-
-			std::cout << surfaceHierarchy.name << " references " << boneReferences.size() << " bones\n";
-			for ( const auto& referencedBone : referencedBoneNamesIndex )
-			{
-				boneReferences[referencedBone.second] = skeleton->boneNamesToIndex.at (referencedBone.first);
-				std::cout << '[' << referencedBone.second << "] " << referencedBone.first << " (" << boneReferences[referencedBone.second] << ")\n";
-			}
 		}
 
 		int ofsBoneReferences = 0;
@@ -673,10 +669,10 @@ void LinearizeSurfaces ( FbxNode& root, std::vector<FbxNode *>& nodes )
 }
 
 std::vector<ModelDetailData> GetModelData (
-		FbxScene& scene,
-		std::vector<FbxNode *>& modelRoots,
-		const Skeleton *skeleton,
-		const SurfaceHierarchyList& hierarchy )
+	FbxScene& scene,
+	std::vector<FbxNode *>& modelRoots,
+	const Skeleton *skeleton,
+	const SurfaceHierarchyList& hierarchy )
 {
 	std::vector<ModelDetailData> detailData;
 	if ( hierarchy.empty() || modelRoots.empty() )
@@ -729,7 +725,6 @@ std::string GetFilename ( const std::string& filePath )
 bool WriteLODData ( const mdxmHeader_t& header, char *buffer, const std::vector<ModelDetailData>& modelDetails )
 {
 	char *lodBasePtr = buffer;
-	int lodOffset = 0;
 
 	for ( const auto& modelDetail : modelDetails )
 	{
@@ -777,10 +772,10 @@ bool WriteLODData ( const mdxmHeader_t& header, char *buffer, const std::vector<
 }
 
 bool WriteSurfaceHierarchyData (
-		const mdxmHeader_t& header,
-		const SurfaceHierarchyList& surfaceHierarchy,
-		int *hierarchyOffsets,
-		mdxmSurfHierarchy_t *hierarchy )
+	const mdxmHeader_t& header,
+	const SurfaceHierarchyList& surfaceHierarchy,
+	int *hierarchyOffsets,
+	mdxmSurfHierarchy_t *hierarchy )
 {
 	char *hierarchyOffsetsBasePtr = reinterpret_cast<char *>(hierarchyOffsets);
 	unsigned hierarchyOffset = sizeof (int) * header.numSurfaces;
@@ -833,10 +828,10 @@ void PrintModelStatistics ( const std::vector<ModelDetailData>& modelDetails )
 }
 
 bool MakeGLMFile (
-		FbxScene& scene,
-		std::vector<FbxNode *>& modelRoots,
-		const Skeleton *skeleton,
-		const std::string& outputPath )
+	FbxScene& scene,
+	std::vector<FbxNode *>& modelRoots,
+	const Skeleton *skeleton,
+	const std::string& outputPath )
 {
 	if ( modelRoots.empty() )
 	{
@@ -854,7 +849,7 @@ bool MakeGLMFile (
 	PrintModelStatistics (modelDetails);
 
 	std::size_t filesize = CalculateGLMFileSize (surfaceHierarchy, modelDetails);
-	
+
 	// Write data
 	std::vector<char> buffer (filesize, '\0');
 
@@ -940,62 +935,7 @@ std::vector<FbxNode *> GetLodRootModels ( FbxNode& sceneRoot )
 	return roots;
 }
 
-bool ReadFile ( const std::string& animationPath, std::vector<char>& buffer )
-{
-	std::ifstream ifs (animationPath.c_str(), std::ios::binary);
-	if ( !ifs )
-	{
-		return false;
-	}
-
-	std::streamoff fileLen;
-
-	ifs.seekg (0, std::ios::end);
-	fileLen = ifs.tellg();
-	ifs.seekg (0, std::ios::beg);
-
-	buffer.resize (static_cast<unsigned int>(fileLen));
-	ifs.read (buffer.data(), fileLen);
-
-	return true;
-}
-
-Skeleton *LoadGLA ( const std::string& animationPath )
-{
-	std::vector<char> buffer;
-	if ( !ReadFile (animationPath, buffer) )
-	{
-		return nullptr;
-	}
-
-	mdxaHeader_t *header = reinterpret_cast<mdxaHeader_t *>(&buffer[0]);
-	if ( header->ident != MDXA_IDENT )
-	{
-		std::cerr << "GLA header is incorrect (expected " << MDXA_IDENT << ", found " << header->ident << '\n';
-		return nullptr;
-	}
-
-	if ( header->version != MDXA_VERSION )
-	{
-		std::cerr << "GLA file has wrong version (expected " << MDXA_VERSION << ", found " << header->version << '\n';
-		return nullptr;
-	}
-
-	char *skelBase = &buffer[sizeof (mdxaHeader_t)];
-	mdxaSkelOffsets_t *offsets = reinterpret_cast<mdxaSkelOffsets_t *>(skelBase);
-	Skeleton *skeleton = new Skeleton;
-
-	skeleton->name = header->name;
-	skeleton->scale = header->scale;
-
-	for ( int i = 0; i < header->numBones; i++ )
-	{
-		mdxaSkel_t *skel = reinterpret_cast<mdxaSkel_t *>(skelBase + offsets->offsets[i]);
-		skeleton->boneNamesToIndex.insert (std::make_pair (skel->name, i));
-	}
-
-	return skeleton;
-}
+} // namespace
 
 int main ( int argc, char *argv[] )
 {
@@ -1045,15 +985,6 @@ int main ( int argc, char *argv[] )
 		}
 	}
 
-	/*
-	if ( i == args.size() )
-	{
-		PrintUsage (args[0]);
-
-		return EXIT_FAILURE;
-	}
-	*/
-
 	std::string modelPath (args.back());
 	std::cout << "Converting " << modelPath << " to GLM.\n";
 	Skeleton *skeleton = nullptr;
@@ -1075,9 +1006,9 @@ int main ( int argc, char *argv[] )
 
 	if ( !importer->Initialize (modelPath.c_str(), -1, fbxManager->GetIOSettings()) )
 	{
-		importer->Destroy();
 		std::cerr << "Failed to import " << modelPath << ".\n";
 
+		fbxManager->Destroy();
 		delete skeleton;
 
 		return EXIT_FAILURE;
@@ -1092,6 +1023,7 @@ int main ( int argc, char *argv[] )
 	{
 		std::cerr << "No root node :(\n";
 
+		fbxManager->Destroy();
 		delete skeleton;
 
 		return EXIT_FAILURE;
@@ -1105,12 +1037,16 @@ int main ( int argc, char *argv[] )
 	{
 		std::cerr << "Failed to create GLM file " << outputPath << ".\n";
 
+		fbxManager->Destroy();
 		delete skeleton;
 
 		return EXIT_FAILURE;
 	}
 
 	std::cout << "GLM file has been written to " << outputPath << ".\n";
+
+	fbxManager->Destroy();
+	delete skeleton;
 
 	return 0;
 }
