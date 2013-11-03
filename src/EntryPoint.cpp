@@ -597,6 +597,10 @@ ModelDetailData CreateModelLod (
 		else
 		{
 			boneReferences.resize (referencedBoneNamesSet.size());
+			for ( const auto& referencedBone : referencedBoneNamesIndex )
+			{
+				boneReferences[referencedBone.second] = skeleton->boneNamesToIndex.at (referencedBone.first);
+			}
 		}
 
 		int ofsBoneReferences = 0;
@@ -996,6 +1000,8 @@ int main ( int argc, char *argv[] )
 		{
 			return EXIT_FAILURE;
 		}
+
+		std::cout << "Using " << animationFile << " for skeleton.\n";
 	}
 
 	FbxManager *fbxManager = FbxManager::Create();

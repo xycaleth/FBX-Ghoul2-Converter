@@ -10,6 +10,8 @@ Skeleton *LoadGLA ( const std::string& animationPath )
 	std::vector<char> buffer;
 	if ( !ReadFile (animationPath, buffer) )
 	{
+		std::cerr << animationPath << " could not be read.\n";
+
 		return nullptr;
 	}
 
