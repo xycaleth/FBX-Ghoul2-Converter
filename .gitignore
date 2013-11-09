@@ -11,3 +11,8 @@
 *.lai
 *.la
 *.a
+
+# Misc files
+*.swp
+.clang_complete
+tags

@@ -989,14 +989,18 @@ int main ( int argc, char *argv[] )
 		}
 	}
 
+	// auto_ptr is deprecated in C++11, but FBX doesn't play nicely with
+	// C++11 libraries on OS X, so we have to resort to using auto_ptr
+	// instead.
+	std::auto_ptr<Skeleton> skeleton;
 	std::string modelPath (args.back());
+
 	std::cout << "Converting " << modelPath << " to GLM.\n";
-	Skeleton *skeleton = nullptr;
 
 	if ( !animationFile.empty() )
 	{
-		skeleton = LoadGLA (animationFile);
-		if ( skeleton == nullptr )
+		skeleton = std::auto_ptr<Skeleton>(LoadGLA (animationFile));
+		if ( skeleton.get() == nullptr )
 		{
 			return EXIT_FAILURE;
 		}
@@ -1015,7 +1019,6 @@ int main ( int argc, char *argv[] )
 		std::cerr << "Failed to import " << modelPath << ".\n";
 
 		fbxManager->Destroy();
-		delete skeleton;
 
 		return EXIT_FAILURE;
 	}
@@ -1030,7 +1033,6 @@ int main ( int argc, char *argv[] )
 		std::cerr << "No root node :(\n";
 
 		fbxManager->Destroy();
-		delete skeleton;
 
 		return EXIT_FAILURE;
 	}
@@ -1039,12 +1041,11 @@ int main ( int argc, char *argv[] )
 	std::sort (modelRoots.begin(), modelRoots.end(),
 		[]( const FbxNode *a, const FbxNode *b ) { return std::strcmp (a->GetName(), b->GetName()) < 0; });
 
-	if ( !MakeGLMFile (*scene, modelRoots, skeleton, outputPath) )
+	if ( !MakeGLMFile (*scene, modelRoots, skeleton.get(), outputPath) )
 	{
 		std::cerr << "Failed to create GLM file " << outputPath << ".\n";
 
 		fbxManager->Destroy();
-		delete skeleton;
 
 		return EXIT_FAILURE;
 	}
@@ -1052,7 +1053,6 @@ int main ( int argc, char *argv[] )
 	std::cout << "GLM file has been written to " << outputPath << ".\n";
 
 	fbxManager->Destroy();
-	delete skeleton;
 
 	return 0;
 }

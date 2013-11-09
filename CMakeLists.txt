@@ -27,7 +27,7 @@ set(INCLUDE_PATH
 )
 
 if(APPLE)
-	set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-std=c++11 -Wno-reserved-user-defined-literal")
+	set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} "-stdlib=libstdc++ -std=c++11 -Wno-reserved-user-defined-literal")
 	set(LINK_LIBRARIES
 		${LINK_LIBRARIES}
 		/System/Library/Frameworks/Carbon.framework
