@@ -35,6 +35,11 @@ if(APPLE)
 		optimized ${FBX_ROOT}/lib/gcc4/ub/release/libfbxsdk.a
 	)
 elseif(WIN32)
+	if(MSVC)
+		add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+		add_definitions(-D_SCL_SECURE_NO_WARNINGS)
+	endif()
+
 	set(LINK_LIBRARIES
 		${LINK_LIBRARIES}
 		debug ${FBX_ROOT}/lib/vs2012/x86/debug/libfbxsdk-md.lib
