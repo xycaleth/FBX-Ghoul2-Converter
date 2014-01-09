@@ -321,6 +321,56 @@ std::size_t CalculateLODSize ( const std::vector<ModelDetailData>& modelData )
 	return filesize;
 }
 
+bool GetSurfaceWeightsData (
+		std::vector<Weights>& vertexWeights,
+		FbxMesh& mesh,
+		std::set<std::string>& referencedBoneNamesSet,
+		std::map<std::string, int>& referencedBoneNamesIndex )
+{
+	for ( auto& weight : vertexWeights )
+	{
+		weight.count = 0;
+	}
+
+	referencedBoneNamesIndex.clear();
+	referencedBoneNamesSet.clear();
+
+	FbxSkin *deformer = static_cast<FbxSkin *>(mesh.GetDeformer(0, FbxDeformer::eSkin));
+	for ( int j = 0; j < deformer->GetClusterCount(); j++ )
+	{
+		FbxCluster *cluster = deformer->GetCluster (j);
+		int weightCount = cluster->GetControlPointIndicesCount();
+		double *weights = cluster->GetControlPointWeights();
+		int *weightIndices = cluster->GetControlPointIndices();
+
+		FbxNode *link = cluster->GetLink();
+		std::string influencer = link->GetName();
+
+		referencedBoneNamesSet.insert (influencer);
+
+		for ( int k = 0; k < weightCount; k++ )
+		{
+			Weights& w = vertexWeights[weightIndices[k]];
+			w.weights[w.count] = static_cast<float>(weights[k]);
+			w.influencers[w.count] = influencer;
+
+			w.count++;
+			assert (w.count <= 4);
+		}
+	}
+
+	int weightCount = 0;
+
+	referencedBoneNamesIndex.clear();
+	for ( auto& boneName : referencedBoneNamesSet )
+	{
+		referencedBoneNamesIndex[boneName] = weightCount++;
+	}
+
+	return true;
+}
+
+
 std::size_t CalculateGLMFileSize (
 	const SurfaceHierarchyList& hierarchy,
 	const std::vector<ModelDetailData>& modelData )
@@ -374,7 +424,7 @@ ModelDetailData CreateModelLod (
 			std::cerr << "No normals for surface " << i << " (" << surfaceHierarchy.name << ")\n";
 		}
 
-		FbxLayerElementArrayTemplate<FbxVector4>& normals = normalsLayer->GetDirectArray();
+		auto& normals = normalsLayer->GetDirectArray();
 
 		const FbxLayerElementUV *uvLayer = layer0->GetUVs();
 		FbxLayerElementArrayTemplate<FbxVector2> *uvs = nullptr;
@@ -393,46 +443,8 @@ ModelDetailData CreateModelLod (
 			}
 		}
 
-		referencedBoneNamesIndex.clear();
-		referencedBoneNamesSet.clear();
-
 		vertexWeights.resize (numPositions);
-		for ( auto& weight : vertexWeights )
-		{
-			weight.count = 0;
-		}
-
-		FbxSkin *deformer = static_cast<FbxSkin *>(mesh.GetDeformer(0, FbxDeformer::eSkin));
-		for ( int j = 0; j < deformer->GetClusterCount(); j++ )
-		{
-			FbxCluster *cluster = deformer->GetCluster (j);
-			int weightCount = cluster->GetControlPointIndicesCount();
-			double *weights = cluster->GetControlPointWeights();
-			int *weightIndices = cluster->GetControlPointIndices();
-
-			FbxNode *link = cluster->GetLink();
-			std::string influencer = link->GetName();
-
-			referencedBoneNamesSet.insert (influencer);
-
-			for ( int k = 0; k < weightCount; k++ )
-			{
-				Weights& w = vertexWeights[weightIndices[k]];
-				w.weights[w.count] = static_cast<float>(weights[k]);
-				w.influencers[w.count] = influencer;
-
-				w.count++;
-				assert (w.count <= 4);
-			}
-		}
-
-		int weightCount = 0;
-
-		referencedBoneNamesIndex.clear();
-		for ( auto& boneName : referencedBoneNamesSet )
-		{
-			referencedBoneNamesIndex[boneName] = weightCount++;
-		}
+		GetSurfaceWeightsData (vertexWeights, mesh, referencedBoneNamesSet, referencedBoneNamesIndex);
 
 		int numTriangles = mesh.GetPolygonCount();
 		int numVerts = numUniquePoints;
@@ -440,14 +452,12 @@ ModelDetailData CreateModelLod (
 		std::vector<mdxmTriangle_t>& triangles = data.surfaces[i].triangles;
 		triangles.resize (numTriangles);
 
-		uniqueVertices.clear();
 		if ( uniqueVertices.size() < numUniquePoints )
 		{
-			uniqueVertices.reserve (numUniquePoints);
+			uniqueVertices.resize (numUniquePoints);
 		}
 
-		FbxAMatrix globalMatrix;
-		globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&node);
+		FbxAMatrix globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&node);
 
 		if ( uvs == nullptr )
 		{
@@ -459,7 +469,7 @@ ModelDetailData CreateModelLod (
 			const int order[] = {1, 2, 0};
 			for ( int j = 0; j < 3; j++ )
 			{
-				Vertex vertex;
+				Vertex& vertex = uniqueVertices[i];
 
 				CopyVertexData (vertex,
 					globalMatrix,
@@ -472,8 +482,6 @@ ModelDetailData CreateModelLod (
 				// Not strictly necessary but makes things cleaner in the output file.
 				vertex.texcoord.st[0] = 0.0f;
 				vertex.texcoord.st[1] = 0.0f;
-
-				uniqueVertices.push_back (vertex);
 			}
 
 			// Indices
@@ -483,10 +491,14 @@ ModelDetailData CreateModelLod (
 		}
 		else
 		{
-			assert (uvLayer->GetMappingMode() == FbxLayerElement::eByPolygonVertex &&
-				uvLayer->GetReferenceMode() == FbxLayerElement::eIndexToDirect);
+			if ( uvLayer->GetMappingMode() != FbxLayerElement::eByPolygonVertex ||
+					uvLayer->GetReferenceMode() != FbxLayerElement::eIndexToDirect )
+			{
+				std::cerr << "UVs for surface " << surfaceHierarchy.name << " are not per-vertex.\n";
+				continue;
+			}
 
-			FbxLayerElementArrayTemplate<int>& uvIndices = uvLayer->GetIndexArray();
+			auto& uvIndices = uvLayer->GetIndexArray();
 			if ( numUniquePoints == numPositions )
 			{
 				// With the same number of texture coordinates, and the same number of
