@@ -227,7 +227,7 @@ void CopyVertexData (
 	int overflowBitOffset = 12;
 
 	// Number of weights
-	vertex.positionAndNormal.numWeightsAndBoneIndexes |= ((weights.count - 1) & 0x2) << 30;
+	vertex.positionAndNormal.numWeightsAndBoneIndexes |= ((weights.count - 1) & 0x3) << 30;
 
 	for ( unsigned i = 0; i < weights.count; i++ )
 	{
