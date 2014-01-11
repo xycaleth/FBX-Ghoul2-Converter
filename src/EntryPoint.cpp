@@ -442,6 +442,42 @@ std::size_t CalculateGLMFileSize (
 		CalculateLODSize (modelData);
 }
 
+static bool GetFbxVertexData (
+	FbxMesh& mesh,
+	int polygon,
+	int vertex,
+	const FbxVector4 *positions,
+	float scale,
+	const FbxAMatrix& globalMatrix,
+	const char *uvNameSet,
+	const std::string& surfaceName,
+	FbxVector4& position,
+	FbxVector4& normal,
+	FbxVector2& texcoord,
+	int *positionIndex)
+{
+	int index = mesh.GetPolygonVertex (polygon, vertex);
+	const FbxVector4& fbxPosition = positions[index];
+	bool noTexcoord;
+	
+	*positionIndex = index;
+	position = globalMatrix.MultT (fbxPosition) * scale;
+
+	if ( !mesh.GetPolygonVertexNormal (polygon, vertex, normal) )
+	{
+		std::cerr << "No vertex normal in triangle " << polygon << ", vertex " << vertex << " of " << surfaceName << '\n';
+		return false;
+	}
+
+	if ( !mesh.GetPolygonVertexUV (polygon, vertex, uvNameSet, texcoord, noTexcoord) || noTexcoord )
+	{
+		std::cerr << "No texture coordinate in triangle " << polygon << ", vertex " << vertex << " of " << surfaceName << '\n';
+		return false;
+	}
+
+	return true;
+}
+
 ModelDetailData CreateModelLod (
 	FbxScene& scene,
 	const SurfaceHierarchyList& hierarchy,
@@ -472,8 +508,9 @@ ModelDetailData CreateModelLod (
 
 		int numUVs = mesh.GetElementUVCount();
 		int numNormals = mesh.GetElementNormalCount();
-		int numTriangles = mesh.GetPolygonCount();
+		int numPolygons = mesh.GetPolygonCount();
 		int numPositions = mesh.GetControlPointsCount();
+		int numTriangles = 0;
 		const FbxVector4 *positions = mesh.GetControlPoints();
 
 		if ( numNormals == 0 )
@@ -486,7 +523,7 @@ ModelDetailData CreateModelLod (
 		GetSurfaceWeightsData (vertexWeights, mesh, referencedBoneNamesSet, referencedBoneNamesIndex);
 
 		std::vector<mdxmTriangle_t>& triangles = data.surfaces[i].triangles;
-		triangles.resize (numTriangles);
+		triangles.reserve (numPolygons);
 
 		FbxAMatrix globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&node);
 
@@ -502,8 +539,15 @@ ModelDetailData CreateModelLod (
 			const int order[] = {1, 2, 0};
 			const FbxGeometryElementNormal *normals = mesh.GetElementNormal();
 
+			if ( numPositions != 3 )
+			{
+				std::cerr << "Tag " << surfaceHierarchy.name << " should have 3 vertex positions, but has " << numPositions << '\n';
+				continue;
+			}
+			
 			// There's going to be 3 vertices for a tag.
 			uniqueVertices.resize (3);
+			triangles.resize (1);
 
 			for ( int j = 0; j < 3; j++ )
 			{
@@ -528,8 +572,6 @@ ModelDetailData CreateModelLod (
 		}
 		else
 		{
-			// FBX models have different vertex winding from JKA.
-			const int order[] = {0, 2, 1};
 			FbxStringList uvNameSetList;
 			const char *uvNameSet = nullptr;
 
@@ -542,41 +584,39 @@ ModelDetailData CreateModelLod (
 
 			uvNameSet = uvNameSetList[0];
 
-			for ( int polygon = 0; polygon < numTriangles; polygon++ )
+			for ( int polygon = 0; polygon < numPolygons; polygon++ )
 			{
+				int vertexIndices[12];
 				int numPolygonVertices = mesh.GetPolygonSize (polygon);
-				if ( numPolygonVertices != 3 )
+
+				if ( numPolygonVertices > 12 )
 				{
-					std::cerr << "Polygon " << i << " of " << surfaceHierarchy.name << " is not a triangle! It has " << numPolygonVertices << " vertices.\n";
-					continue;
+					std::cerr << "ERROR: Polygon " << polygon << " in " << surfaceHierarchy.name << " LOD " << lod << " has more than 12 vertices in a polygon.\n";
+					break;
 				}
 
-				for ( int vertex = 0; vertex < 3; vertex++ )
+				for ( int vertex = 0; vertex < numPolygonVertices; vertex++ )
 				{
-					int positionIndex = mesh.GetPolygonVertex (polygon, vertex);
-					const FbxVector4& position = positions[positionIndex];
+					int positionIndex;
+					FbxVector4 position;
 					FbxVector4 normal;
 					FbxVector2 texcoord;
-					bool noTexcoord;
-					FbxVector4 positionWS = globalMatrix.MultT (position) * scale;
 
-					if ( !mesh.GetPolygonVertexNormal (polygon, vertex, normal) )
+					if ( !GetFbxVertexData (
+						mesh, polygon, vertex,
+						positions, scale, globalMatrix, uvNameSet, surfaceHierarchy.name,
+						position, normal, texcoord, &positionIndex) )
 					{
-						std::cerr << "No vertex normal in triangle " << polygon << ", vertex " << vertex << " of " << surfaceHierarchy.name << '\n';
+						break;
 					}
 
-					if ( !mesh.GetPolygonVertexUV (polygon, vertex, uvNameSet, texcoord, noTexcoord) || noTexcoord )
-					{
-						std::cerr << "No texture coordinate in triangle " << polygon << ", vertex " << vertex << " of " << surfaceHierarchy.name << '\n';
-					}
-
-					int vertexID = GetNextVertexID (positionWS, normal, texcoord, uniqueVertices);
+					int vertexID = GetNextVertexID (position, normal, texcoord, uniqueVertices);
 					if ( vertexID == uniqueVertices.size() )
 					{
 						Vertex newVertex;
 
 						CopyVertexData (newVertex,
-							positionWS,
+							position,
 							normal,
 							vertexWeights[positionIndex],
 							referencedBoneNamesIndex);
@@ -587,16 +627,29 @@ ModelDetailData CreateModelLod (
 						uniqueVertices.push_back (newVertex);
 					}
 
-					triangles[polygon].indexes[order[vertex]] = vertexID;
+					vertexIndices[vertex] = vertexID;
 				}
 
-				float area = CalculateArea (
-					uniqueVertices[triangles[polygon].indexes[0]].positionAndNormal.position,
-					uniqueVertices[triangles[polygon].indexes[1]].positionAndNormal.position,
-					uniqueVertices[triangles[polygon].indexes[2]].positionAndNormal.position);
-				if ( area < 1e-2f )
+				for ( int i = 1, end = numPolygonVertices - 1; i < end; i++ )
 				{
-					std::cout << "Could remove triangle " << polygon << " as its area is only " << area << '\n';
+					// Reverse the winding of the triangle vertices.
+					mdxmTriangle_t triangle;
+					triangle.indexes[0] = vertexIndices[0];
+					triangle.indexes[2] = vertexIndices[i];
+					triangle.indexes[1] = vertexIndices[i + 1];
+
+					triangles.push_back (triangle);
+
+					float area = CalculateArea (
+						uniqueVertices[triangles[numTriangles].indexes[0]].positionAndNormal.position,
+						uniqueVertices[triangles[numTriangles].indexes[1]].positionAndNormal.position,
+						uniqueVertices[triangles[numTriangles].indexes[2]].positionAndNormal.position);
+					if ( area < 1e-2f )
+					{
+						std::cout << "Could remove triangle " << numTriangles << " as its area is only " << area << '\n';
+					}
+	
+					numTriangles++;
 				}
 			}
 		}
