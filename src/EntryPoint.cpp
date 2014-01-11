@@ -199,38 +199,6 @@ struct Weights
 	std::size_t count;
 };
 
-static void CrossProduct ( const float a[3], const float b[3], float result[3] )
-{
-	result[0] = a[1] * b[2] - a[2] * b[1];
-	result[1] = a[2] * b[0] - a[0] * b[2];
-	result[2] = a[0] * b[1] - a[1] * b[0];
-}
-
-static void VectorSubtract ( const float a[3], const float b[3], float result[3] )
-{
-	result[0] = a[0] - b[0];
-	result[1] = a[1] - b[1];
-	result[2] = a[2] - b[2];
-}
-
-static float VectorLength ( const float v[3] )
-{
-	return std::sqrt (v[0] * v[0] + v[1] * v[1] + v[2] + v[2]);
-}
-
-static float CalculateArea ( const float a[3], const float b[3], const float c[3] )
-{
-	float x[3];
-	float y[3];
-	float z[3];
-
-	VectorSubtract (b, a, x);
-	VectorSubtract (c, a, y);
-	CrossProduct (x, y, z);
-
-	return 0.5f * VectorLength (z);
-}
-
 void CopyVertexData (
 	Vertex& vertex,
 	const FbxVector4& position,
@@ -247,11 +215,19 @@ void CopyVertexData (
 	vertex.positionAndNormal.normal[2] = static_cast<float>(normal[2]);
 	VectorNormalize (vertex.positionAndNormal.normal);
 
-	assert (weights.count <= 4);
-	// Number of weights
-	vertex.positionAndNormal.numWeightsAndBoneIndexes = ((weights.count - 1) & 0x2) << 30;
+	vertex.positionAndNormal.numWeightsAndBoneIndexes = 0;
+
+	if ( weights.count > 4 )
+	{
+		std::cerr << "Bad things happened.\n";
+		return;
+	}
+
 	int bitOffset = 0;
 	int overflowBitOffset = 12;
+
+	// Number of weights
+	vertex.positionAndNormal.numWeightsAndBoneIndexes |= ((weights.count - 1) & 0x2) << 30;
 
 	for ( unsigned i = 0; i < weights.count; i++ )
 	{
@@ -353,10 +329,10 @@ std::size_t CalculateLODSize ( const std::vector<ModelDetailData>& modelData )
 }
 
 bool GetSurfaceWeightsData (
-		std::vector<Weights>& vertexWeights,
-		FbxMesh& mesh,
-		std::set<std::string>& referencedBoneNamesSet,
-		std::map<std::string, int>& referencedBoneNamesIndex )
+	const FbxMesh& mesh,
+	std::vector<Weights>& vertexWeights,
+	std::set<std::string>& referencedBoneNamesSet,
+	std::map<std::string, int>& referencedBoneNamesIndex )
 {
 	for ( auto& weight : vertexWeights )
 	{
@@ -366,7 +342,7 @@ bool GetSurfaceWeightsData (
 	referencedBoneNamesIndex.clear();
 	referencedBoneNamesSet.clear();
 
-	FbxSkin *deformer = static_cast<FbxSkin *>(mesh.GetDeformer(0, FbxDeformer::eSkin));
+	FbxSkin *deformer = static_cast<FbxSkin *>(mesh.GetDeformer (0, FbxDeformer::eSkin));
 	for ( int j = 0; j < deformer->GetClusterCount(); j++ )
 	{
 		FbxCluster *cluster = deformer->GetCluster (j);
@@ -520,7 +496,7 @@ ModelDetailData CreateModelLod (
 		}
 
 		vertexWeights.resize (numPositions);
-		GetSurfaceWeightsData (vertexWeights, mesh, referencedBoneNamesSet, referencedBoneNamesIndex);
+		GetSurfaceWeightsData (mesh, vertexWeights, referencedBoneNamesSet, referencedBoneNamesIndex);
 
 		std::vector<mdxmTriangle_t>& triangles = data.surfaces[i].triangles;
 		triangles.reserve (numPolygons);
@@ -578,7 +554,7 @@ ModelDetailData CreateModelLod (
 			mesh.GetUVSetNames (uvNameSetList);
 			if ( uvNameSetList.GetCount() == 0 )
 			{
-				std::cerr << "Surface '" << surfaceHierarchy.name << "' has no UV coordinates.\n";
+				std::cerr << "ERROR: Surface '" << surfaceHierarchy.name << "' has no UV coordinates.\n";
 				continue;
 			}
 
@@ -639,15 +615,6 @@ ModelDetailData CreateModelLod (
 					triangle.indexes[1] = vertexIndices[i + 1];
 
 					triangles.push_back (triangle);
-
-					float area = CalculateArea (
-						uniqueVertices[triangles[numTriangles].indexes[0]].positionAndNormal.position,
-						uniqueVertices[triangles[numTriangles].indexes[1]].positionAndNormal.position,
-						uniqueVertices[triangles[numTriangles].indexes[2]].positionAndNormal.position);
-					if ( area < 1e-2f )
-					{
-						std::cout << "Could remove triangle " << numTriangles << " as its area is only " << area << '\n';
-					}
 	
 					numTriangles++;
 				}
