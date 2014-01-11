@@ -233,12 +233,10 @@ static float CalculateArea ( const float a[3], const float b[3], const float c[3
 
 void CopyVertexData (
 	Vertex& vertex,
-	const FbxAMatrix& globalMatrix,
 	const FbxVector4& position,
 	const FbxVector4& normal,
 	const Weights& weights,
-	const std::map<std::string, int>& boneIndexes,
-	float modelScale )
+	const std::map<std::string, int>& boneIndexes )
 {
 	vertex.positionAndNormal.position[0] = static_cast<float>(position[0]);
 	vertex.positionAndNormal.position[1] = static_cast<float>(position[1]);
@@ -250,22 +248,25 @@ void CopyVertexData (
 	VectorNormalize (vertex.positionAndNormal.normal);
 
 	assert (weights.count <= 4);
+	// Number of weights
 	vertex.positionAndNormal.numWeightsAndBoneIndexes = ((weights.count - 1) & 0x2) << 30;
 	int bitOffset = 0;
-	int overflowBitOffset = 20;
+	int overflowBitOffset = 12;
 
 	for ( unsigned i = 0; i < weights.count; i++ )
 	{
-		// index
+		// bone index
 		vertex.positionAndNormal.numWeightsAndBoneIndexes |= (boneIndexes.at (weights.influencers[i]) & 0x1f) << bitOffset;
 		bitOffset += 5;
 
 		// overflow of weight
 		int weight = static_cast<int>(weights.weights[i] * 1023);
 
+		// Top 2 bits of the weight
 		vertex.positionAndNormal.numWeightsAndBoneIndexes |= (weight & 0x300) << overflowBitOffset;
 		overflowBitOffset += 2;
 
+		// Bottom 8 bits of the weight
 		vertex.positionAndNormal.boneWeightings[i] = static_cast<unsigned char>(weight & 0xff);
 	}
 
@@ -510,12 +511,10 @@ ModelDetailData CreateModelLod (
 				FbxVector4 positionWS = globalMatrix.MultT (positions[order[j]]) * scale;
 
 				CopyVertexData (vertex,
-					globalMatrix,
 					positionWS,
 					normals->GetDirectArray().GetAt (order[j]),
 					vertexWeights[order[j]],
-					referencedBoneNamesIndex,
-					scale);
+					referencedBoneNamesIndex);
 
 				// Not strictly necessary but makes things cleaner in the output file.
 				vertex.texcoord.st[0] = 0.0f;
@@ -577,12 +576,10 @@ ModelDetailData CreateModelLod (
 						Vertex newVertex;
 
 						CopyVertexData (newVertex,
-							globalMatrix,
 							positionWS,
 							normal,
 							vertexWeights[positionIndex],
-							referencedBoneNamesIndex,
-							scale);
+							referencedBoneNamesIndex);
 
 						newVertex.texcoord.st[0] = static_cast<float>(texcoord[0]);
 						newVertex.texcoord.st[1] = static_cast<float>(texcoord[1]);
