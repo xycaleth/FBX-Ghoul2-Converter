@@ -199,6 +199,38 @@ struct Weights
 	std::size_t count;
 };
 
+static void CrossProduct ( const float a[3], const float b[3], float result[3] )
+{
+	result[0] = a[1] * b[2] - a[2] * b[1];
+	result[1] = a[2] * b[0] - a[0] * b[2];
+	result[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static void VectorSubtract ( const float a[3], const float b[3], float result[3] )
+{
+	result[0] = a[0] - b[0];
+	result[1] = a[1] - b[1];
+	result[2] = a[2] - b[2];
+}
+
+static float VectorLength ( const float v[3] )
+{
+	return std::sqrt (v[0] * v[0] + v[1] * v[1] + v[2] + v[2]);
+}
+
+static float CalculateArea ( const float a[3], const float b[3], const float c[3] )
+{
+	float x[3];
+	float y[3];
+	float z[3];
+
+	VectorSubtract (b, a, x);
+	VectorSubtract (c, a, y);
+	CrossProduct (x, y, z);
+
+	return 0.5f * VectorLength (z);
+}
+
 void CopyVertexData (
 	Vertex& vertex,
 	const FbxAMatrix& globalMatrix,
@@ -208,15 +240,13 @@ void CopyVertexData (
 	const std::map<std::string, int>& boneIndexes,
 	float modelScale )
 {
-	FbxVector4 positionWS = globalMatrix.MultT (position);
-	vertex.positionAndNormal.position[0] = modelScale * static_cast<float>(positionWS[0]);
-	vertex.positionAndNormal.position[1] = modelScale * static_cast<float>(positionWS[1]);
-	vertex.positionAndNormal.position[2] = modelScale * static_cast<float>(positionWS[2]);
+	vertex.positionAndNormal.position[0] = static_cast<float>(position[0]);
+	vertex.positionAndNormal.position[1] = static_cast<float>(position[1]);
+	vertex.positionAndNormal.position[2] = static_cast<float>(position[2]);
 
-	FbxVector4 normalWS = globalMatrix.MultR (normal);
-	vertex.positionAndNormal.normal[0] = static_cast<float>(normalWS[0]);
-	vertex.positionAndNormal.normal[1] = static_cast<float>(normalWS[1]);
-	vertex.positionAndNormal.normal[2] = static_cast<float>(normalWS[2]);
+	vertex.positionAndNormal.normal[0] = static_cast<float>(normal[0]);
+	vertex.positionAndNormal.normal[1] = static_cast<float>(normal[1]);
+	vertex.positionAndNormal.normal[2] = static_cast<float>(normal[2]);
 	VectorNormalize (vertex.positionAndNormal.normal);
 
 	assert (weights.count <= 4);
@@ -370,6 +400,37 @@ bool GetSurfaceWeightsData (
 	return true;
 }
 
+static bool CompareVec3 ( const float v1[3], const FbxVector4& v2, float epsilon )
+{
+	return fabs (v1[0] - static_cast<float>(v2[0])) < epsilon &&
+			fabs (v1[1] - static_cast<float>(v2[1])) < epsilon &&
+			fabs (v1[2] - static_cast<float>(v2[2])) < epsilon;
+}
+
+static bool CompareVec2 ( const float v1[2], const FbxVector2& v2, float epsilon )
+{
+	return fabs (v1[0] - static_cast<float>(v2[0])) < epsilon &&
+			fabs (v1[1] - static_cast<float>(v2[1])) < epsilon;
+}
+
+static int GetNextVertexID (
+	const FbxVector4& position,
+	const FbxVector4& normal,
+	const FbxVector2& texcoord,
+	const std::vector<Vertex>& vertices )
+{
+	for ( size_t i = 0, end = vertices.size(); i < end; i++ )
+	{
+		if ( CompareVec3 (vertices[i].positionAndNormal.position, position, 1e-3f) &&
+			CompareVec3 (vertices[i].positionAndNormal.normal, normal, 1e-6f) &&
+			CompareVec2 (vertices[i].texcoord.st, texcoord, 1e-6f) )
+		{
+			return static_cast<int>(i);
+		}
+	}
+
+	return static_cast<int>(vertices.size());
+}
 
 std::size_t CalculateGLMFileSize (
 	const SurfaceHierarchyList& hierarchy,
@@ -387,19 +448,18 @@ ModelDetailData CreateModelLod (
 	const Skeleton *skeleton,
 	std::vector<FbxNode *>& nodes )
 {
-	ModelDetailData data;
-	data.lod = lod;
-	data.surfaces.resize (hierarchy.size());
-
 	// Define these variables outside the loop to prevent repeated
 	// allocation and freeing of memory.
-	std::map<VertexId, int> uniqueVerticesMap;
 	std::vector<Vertex> uniqueVertices;
 	std::vector<Weights> vertexWeights;
 	std::set<std::string> referencedBoneNamesSet;
 	std::map<std::string, int> referencedBoneNamesIndex;
 
 	float scale = skeleton != nullptr ? skeleton->scale : 1.0f;
+
+	ModelDetailData data;
+	data.lod = lod;
+	data.surfaces.resize (hierarchy.size());
 
 	for ( std::size_t i = 0; i < hierarchy.size(); i++ )
 	{
@@ -409,57 +469,29 @@ ModelDetailData CreateModelLod (
 		FbxNode& node = *nodes[i];
 		FbxMesh& mesh = *GetFBXMesh (node);
 
-		const int *indices = mesh.GetPolygonVertices();
+		int numUVs = mesh.GetElementUVCount();
+		int numNormals = mesh.GetElementNormalCount();
+		int numTriangles = mesh.GetPolygonCount();
+		int numPositions = mesh.GetControlPointsCount();
 		const FbxVector4 *positions = mesh.GetControlPoints();
-		const FbxLayer *layer0 = mesh.GetLayer (0);
 
-		if ( layer0 == nullptr )
-		{
-			std::cerr << "Normals and texture coordinates not found for surface " << i << " (" << surfaceHierarchy.name << ")\n";
-		}
-
-		const FbxLayerElementNormal *normalsLayer = layer0->GetNormals();
-		if ( normalsLayer == nullptr )
+		if ( numNormals == 0 )
 		{
 			std::cerr << "No normals for surface " << i << " (" << surfaceHierarchy.name << ")\n";
-		}
-
-		auto& normals = normalsLayer->GetDirectArray();
-
-		const FbxLayerElementUV *uvLayer = layer0->GetUVs();
-		FbxLayerElementArrayTemplate<FbxVector2> *uvs = nullptr;
-
-		std::size_t numUniquePoints = mesh.GetControlPointsCount();
-		std::size_t numPositions = mesh.GetControlPointsCount();
-		if ( uvLayer != nullptr )
-		{
-			if ( !mesh.GetTextureUV (&uvs) )
-			{
-				std::cerr << "Failed to retrieve texture UVs for surface " << i << '(' << surfaceHierarchy.name << ")\n";
-			}
-			else
-			{
-				numUniquePoints = uvs->GetCount();
-			}
+			continue;
 		}
 
 		vertexWeights.resize (numPositions);
 		GetSurfaceWeightsData (vertexWeights, mesh, referencedBoneNamesSet, referencedBoneNamesIndex);
 
-		int numTriangles = mesh.GetPolygonCount();
-		int numVerts = numUniquePoints;
-
 		std::vector<mdxmTriangle_t>& triangles = data.surfaces[i].triangles;
 		triangles.resize (numTriangles);
 
-		if ( uniqueVertices.size() < numUniquePoints )
-		{
-			uniqueVertices.resize (numUniquePoints);
-		}
-
 		FbxAMatrix globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&node);
 
-		if ( uvs == nullptr )
+		uniqueVertices.clear();
+
+		if ( numUVs == 0 )
 		{
 			// The only surfaces with no UVs are the tags and the "stupidtriangle" surface.
 
@@ -467,14 +499,20 @@ ModelDetailData CreateModelLod (
 			// the different edge lengths. The mid-length edge is taken to be the Y axis,
 			// and shortest to be X axis.
 			const int order[] = {1, 2, 0};
+			const FbxGeometryElementNormal *normals = mesh.GetElementNormal();
+
+			// There's going to be 3 vertices for a tag.
+			uniqueVertices.resize (3);
+
 			for ( int j = 0; j < 3; j++ )
 			{
-				Vertex& vertex = uniqueVertices[i];
+				Vertex& vertex = uniqueVertices[j];
+				FbxVector4 positionWS = globalMatrix.MultT (positions[order[j]]) * scale;
 
 				CopyVertexData (vertex,
 					globalMatrix,
-					positions[order[j]],
-					normals[order[j]],
+					positionWS,
+					normals->GetDirectArray().GetAt (order[j]),
 					vertexWeights[order[j]],
 					referencedBoneNamesIndex,
 					scale);
@@ -491,112 +529,92 @@ ModelDetailData CreateModelLod (
 		}
 		else
 		{
-			if ( uvLayer->GetMappingMode() != FbxLayerElement::eByPolygonVertex ||
-					uvLayer->GetReferenceMode() != FbxLayerElement::eIndexToDirect )
+			// FBX models have different vertex winding from JKA.
+			const int order[] = {0, 2, 1};
+			FbxStringList uvNameSetList;
+			const char *uvNameSet = nullptr;
+
+			mesh.GetUVSetNames (uvNameSetList);
+			if ( uvNameSetList.GetCount() == 0 )
 			{
-				std::cerr << "UVs for surface " << surfaceHierarchy.name << " are not per-vertex.\n";
+				std::cerr << "Surface '" << surfaceHierarchy.name << "' has no UV coordinates.\n";
 				continue;
 			}
 
-			auto& uvIndices = uvLayer->GetIndexArray();
-			if ( numUniquePoints == numPositions )
+			uvNameSet = uvNameSetList[0];
+
+			for ( int polygon = 0; polygon < numTriangles; polygon++ )
 			{
-				// With the same number of texture coordinates, and the same number of
-				// position/normals, it's much easier to produce unique vertices.
-				uniqueVertices.resize (numUniquePoints);
-				for ( int j = 0, count = uvIndices.GetCount(); j < count; j++ )
+				int numPolygonVertices = mesh.GetPolygonSize (polygon);
+				if ( numPolygonVertices != 3 )
 				{
-					Vertex& vertex = uniqueVertices[indices[j]];
-					if ( vertex.filled )
+					std::cerr << "Polygon " << i << " of " << surfaceHierarchy.name << " is not a triangle! It has " << numPolygonVertices << " vertices.\n";
+					continue;
+				}
+
+				for ( int vertex = 0; vertex < 3; vertex++ )
+				{
+					int positionIndex = mesh.GetPolygonVertex (polygon, vertex);
+					const FbxVector4& position = positions[positionIndex];
+					FbxVector4 normal;
+					FbxVector2 texcoord;
+					bool noTexcoord;
+					FbxVector4 positionWS = globalMatrix.MultT (position) * scale;
+
+					if ( !mesh.GetPolygonVertexNormal (polygon, vertex, normal) )
 					{
-						continue;
+						std::cerr << "No vertex normal in triangle " << polygon << ", vertex " << vertex << " of " << surfaceHierarchy.name << '\n';
 					}
 
-					vertex.filled = true;
-
-					CopyVertexData (vertex,
-						globalMatrix,
-						positions[indices[j]],
-						normals[indices[j]],
-						vertexWeights[indices[j]],
-						referencedBoneNamesIndex,
-						scale);
-
-					FbxVector2 tc = uvs->GetAt (uvIndices[j]);
-					vertex.texcoord.st[0] = static_cast<float>(tc[0]);
-					vertex.texcoord.st[1] = 1.0f - static_cast<float>(tc[1]);
-				}
-
-				// Triangles
-				const int *index = indices;
-				for ( int j = 0, count = triangles.size(); j < count; j++, index += 3 )
-				{
-					triangles[j].indexes[0] = index[0];
-					triangles[j].indexes[1] = index[2];
-					triangles[j].indexes[2] = index[1];
-				}
-			}
-			else
-			{
-				int index = 0;
-
-				uniqueVerticesMap.clear();
-				for ( int tri = 0, k = 0; tri < numTriangles; tri++ )
-				{
-					int triangle[3];
-
-					for ( int j = 0; j < 3; k++, j++ )
+					if ( !mesh.GetPolygonVertexUV (polygon, vertex, uvNameSet, texcoord, noTexcoord) || noTexcoord )
 					{
-						VertexId id (indices[k], uvIndices[k]);
-						const auto it = uniqueVerticesMap.find (id);
-
-						if ( it == uniqueVerticesMap.end() )
-						{
-							Vertex v;
-
-							uniqueVerticesMap.insert (std::make_pair (id, index));
-							CopyVertexData (v,
-								globalMatrix,
-								positions[id.positionId],
-								normals[id.positionId],
-								vertexWeights[id.positionId],
-								referencedBoneNamesIndex,
-								scale);
-
-							FbxVector2 tc = uvs->GetAt (id.texcoordId);
-							v.texcoord.st[0] = static_cast<float>(tc[0]);
-							v.texcoord.st[1] = 1.0f - static_cast<float>(tc[1]);
-
-							triangle[j] = index;
-							index++;
-
-							uniqueVertices.push_back (v);
-						}
-						else
-						{
-							triangle[j] = it->second;
-						}
+						std::cerr << "No texture coordinate in triangle " << polygon << ", vertex " << vertex << " of " << surfaceHierarchy.name << '\n';
 					}
 
-					triangles[tri].indexes[0] = triangle[0];
-					triangles[tri].indexes[1] = triangle[2];
-					triangles[tri].indexes[2] = triangle[1];
+					int vertexID = GetNextVertexID (positionWS, normal, texcoord, uniqueVertices);
+					if ( vertexID == uniqueVertices.size() )
+					{
+						Vertex newVertex;
+
+						CopyVertexData (newVertex,
+							globalMatrix,
+							positionWS,
+							normal,
+							vertexWeights[positionIndex],
+							referencedBoneNamesIndex,
+							scale);
+
+						newVertex.texcoord.st[0] = static_cast<float>(texcoord[0]);
+						newVertex.texcoord.st[1] = static_cast<float>(texcoord[1]);
+
+						uniqueVertices.push_back (newVertex);
+					}
+
+					triangles[polygon].indexes[order[vertex]] = vertexID;
 				}
 
-				numVerts = index;
+				float area = CalculateArea (
+					uniqueVertices[triangles[polygon].indexes[0]].positionAndNormal.position,
+					uniqueVertices[triangles[polygon].indexes[1]].positionAndNormal.position,
+					uniqueVertices[triangles[polygon].indexes[2]].positionAndNormal.position);
+				if ( area < 1e-2f )
+				{
+					std::cout << "Could remove triangle " << polygon << " as its area is only " << area << '\n';
+				}
 			}
 		}
 
 		std::vector<mdxmVertexTexcoord_t>& texcoords = data.surfaces[i].texcoords;
 		std::vector<mdxmVertex_t>& vertices = data.surfaces[i].vertices;
 
-		texcoords.resize (numVerts);
-		vertices.resize (numVerts);
+		texcoords.resize (uniqueVertices.size());
+		vertices.resize (uniqueVertices.size());
 
-		for ( int j = 0; j < numVerts; j++ )
+		for ( size_t j = 0, numVerts = uniqueVertices.size(); j < numVerts; j++ )
 		{
 			vertices[j] = uniqueVertices[j].positionAndNormal;
-			texcoords[j] = uniqueVertices[j].texcoord;
+			texcoords[j].st[0] = uniqueVertices[j].texcoord.st[0];
+			texcoords[j].st[1] = 1.0f - uniqueVertices[j].texcoord.st[1];
 		}
 
 		// Bone references
@@ -618,15 +636,25 @@ ModelDetailData CreateModelLod (
 		int ofsBoneReferences = 0;
 		ofsBoneReferences += sizeof (mdxmSurface_t);
 		ofsBoneReferences += sizeof (mdxmTriangle_t) * numTriangles;
-		ofsBoneReferences += sizeof (mdxmVertex_t) * numVerts;
-		ofsBoneReferences += sizeof (mdxmVertexTexcoord_t) * numVerts;
+		ofsBoneReferences += sizeof (mdxmVertex_t) * uniqueVertices.size();
+		ofsBoneReferences += sizeof (mdxmVertexTexcoord_t) * uniqueVertices.size();
+
+		if ( uniqueVertices.size() > 1000 )
+		{
+			std::cout << "WARNING: '" << surfaceHierarchy.name << "' in LOD " << lod << " has " << uniqueVertices.size() << " vertices - the engine supports up to 1000 vertices per surface.\n";
+		}
+
+		if ( numTriangles * 3 > 6000 )
+		{
+			std::cout << "WARNING: '" << surfaceHierarchy.name << "' in LOD " << lod << " has " << (numTriangles * 3) << " triangles - the engine supports up to 6000 triangles per surface.\n";
+		}
 
 		// Fill in the metadata
 		metadata.ident = 0;
 		metadata.thisSurfaceIndex = i;
 		metadata.ofsTriangles = sizeof (mdxmSurface_t);
 		metadata.numTriangles = numTriangles;
-		metadata.numVerts = numVerts;
+		metadata.numVerts = uniqueVertices.size();
 		metadata.ofsVerts = metadata.ofsTriangles + sizeof (mdxmTriangle_t) * metadata.numTriangles;
 		metadata.numBoneReferences = static_cast<int>(boneReferences.size());
 		metadata.ofsBoneReferences = ofsBoneReferences;
