@@ -69,7 +69,31 @@ struct mdxmVertex_t
 {
 	float normal[3];
 	float position[3];
+
+	/*!
+	 * Packed 32-bit uint. This stores three things: the number of weights,
+	 * the indexes of the bones which this vertex is weighted to, and the top 2
+	 * bits of each of the weights influences.
+	 *
+	 * The uint is laid like like so:
+	 * - Bits 31 - 30:	Number of weights (where 0 = 1, and up to 4 weights).
+	 * - Bits 29 - 28:	Reserved
+	 * - Bits 27 - 26:	Upper 2 bits of weightings of bone 4.
+	 * - Bits 25 - 24:	Upper 2 bits of weightings of bone 3.
+	 * - Bits 23 - 22:	Upper 2 bits of weightings of bone 2.
+	 * - Bits 21 - 20:	Upper 2 bits of weightings of bone 1.
+	 * - Bits 19 - 15:	Bone index 4
+	 * - Bits 14 - 10:	Bone index 3
+	 * - Bits 9 - 5:	Bone index 2
+	 * - Bits 4 - 0:	Bone index 1
+	 */
 	unsigned int numWeightsAndBoneIndexes;
+
+	/*!
+	 * Stores the lower 8 bits of the bone weightings. When combined with top 2
+	 * bits from the above field, the result should be divided by 1023 to
+	 * get the floating-point weight.
+	 */
 	unsigned char boneWeightings[4];
 };
 
