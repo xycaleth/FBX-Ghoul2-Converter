@@ -377,20 +377,20 @@ bool GetSurfaceWeightsData (
 	return true;
 }
 
-static bool CompareVec3 ( const float v1[3], const FbxVector4& v2, float epsilon )
+bool CompareVec3 ( const float v1[3], const FbxVector4& v2, float epsilon )
 {
 	return fabs (v1[0] - static_cast<float>(v2[0])) < epsilon &&
 			fabs (v1[1] - static_cast<float>(v2[1])) < epsilon &&
 			fabs (v1[2] - static_cast<float>(v2[2])) < epsilon;
 }
 
-static bool CompareVec2 ( const float v1[2], const FbxVector2& v2, float epsilon )
+bool CompareVec2 ( const float v1[2], const FbxVector2& v2, float epsilon )
 {
 	return fabs (v1[0] - static_cast<float>(v2[0])) < epsilon &&
 			fabs (v1[1] - static_cast<float>(v2[1])) < epsilon;
 }
 
-static int GetNextVertexID (
+int GetNextVertexID (
 	const FbxVector4& position,
 	const FbxVector4& normal,
 	const FbxVector2& texcoord,
@@ -418,26 +418,20 @@ std::size_t CalculateGLMFileSize (
 		CalculateLODSize (modelData);
 }
 
-static bool GetFbxVertexData (
-	FbxMesh& mesh,
+bool GetFbxVertexData (
+	const FbxMesh& mesh,
 	int polygon,
 	int vertex,
-	const FbxVector4 *positions,
-	float scale,
-	const FbxAMatrix& globalMatrix,
 	const char *uvNameSet,
 	const std::string& surfaceName,
-	FbxVector4& position,
 	FbxVector4& normal,
 	FbxVector2& texcoord,
 	int *positionIndex)
 {
 	int index = mesh.GetPolygonVertex (polygon, vertex);
-	const FbxVector4& fbxPosition = positions[index];
 	bool noTexcoord;
 	
 	*positionIndex = index;
-	position = globalMatrix.MultT (fbxPosition) * scale;
 
 	if ( !mesh.GetPolygonVertexNormal (polygon, vertex, normal) )
 	{
@@ -567,26 +561,29 @@ ModelDetailData CreateModelLod (
 
 				if ( numPolygonVertices > 12 )
 				{
-					std::cerr << "ERROR: Polygon " << polygon << " in " << surfaceHierarchy.name << " LOD " << lod << " has more than 12 vertices in a polygon.\n";
+					std::cerr << "ERROR: Polygon " << polygon << " in " << surfaceHierarchy.name << " LOD " << lod << " has more than 12 vertices in a polygon, and cannot be handled by the converter.\n";
 					break;
 				}
 
 				for ( int vertex = 0; vertex < numPolygonVertices; vertex++ )
 				{
 					int positionIndex;
+					int vertexID;
 					FbxVector4 position;
 					FbxVector4 normal;
 					FbxVector2 texcoord;
 
 					if ( !GetFbxVertexData (
 						mesh, polygon, vertex,
-						positions, scale, globalMatrix, uvNameSet, surfaceHierarchy.name,
-						position, normal, texcoord, &positionIndex) )
+						uvNameSet, surfaceHierarchy.name,
+						normal, texcoord, &positionIndex) )
 					{
 						break;
 					}
 
-					int vertexID = GetNextVertexID (position, normal, texcoord, uniqueVertices);
+					position = globalMatrix.MultT (positions[positionIndex]) * scale;
+
+					vertexID = GetNextVertexID (position, normal, texcoord, uniqueVertices);
 					if ( vertexID == uniqueVertices.size() )
 					{
 						Vertex newVertex;
