@@ -539,6 +539,8 @@ ModelDetailData CreateModelLod (
 			triangles[0].indexes[0] = 0;
 			triangles[0].indexes[1] = 1;
 			triangles[0].indexes[2] = 2;
+
+			numTriangles = 1;
 		}
 		else
 		{
