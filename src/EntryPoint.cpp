@@ -141,39 +141,8 @@ SurfaceHierarchyList CreateSurfaceHierarchy ( FbxNode& root )
 	return hierarchyList;
 }
 
-struct VertexId
-{
-	VertexId() {}
-	VertexId ( int positionId, int texcoordId )
-		: positionId (positionId)
-		, texcoordId (texcoordId)
-	{
-	}
-
-	int positionId;
-	int texcoordId;
-
-	bool operator < ( const VertexId& id ) const 
-	{
-		if ( positionId < id.positionId )
-		{
-			return true;
-		}
-		else if ( positionId > id.positionId )
-		{
-			return false;
-		}
-		else
-		{
-			return texcoordId < id.texcoordId;
-		}
-	}
-};
-
 struct Vertex
 {
-	Vertex(): filled (false) {}
-	bool filled;
 	mdxmVertex_t positionAndNormal;
 	mdxmVertexTexcoord_t texcoord;
 };
@@ -217,11 +186,8 @@ void CopyVertexData (
 
 	vertex.positionAndNormal.numWeightsAndBoneIndexes = 0;
 
-	if ( weights.count > 4 )
-	{
-		std::cerr << "Bad things happened.\n";
-		return;
-	}
+	// Checked this earlier, so shouldn't be a problem.
+	assert (weights.count <= 4);
 
 	int bitOffset = 0;
 	int overflowBitOffset = 12;
@@ -346,7 +312,7 @@ bool GetSurfaceWeightsData (
 	for ( int j = 0; j < deformer->GetClusterCount(); j++ )
 	{
 		FbxCluster *cluster = deformer->GetCluster (j);
-		int weightCount = cluster->GetControlPointIndicesCount();
+		int weightCount = std::min (cluster->GetControlPointIndicesCount(), 4);
 		double *weights = cluster->GetControlPointWeights();
 		int *weightIndices = cluster->GetControlPointIndices();
 
@@ -362,7 +328,6 @@ bool GetSurfaceWeightsData (
 			w.influencers[w.count] = influencer;
 
 			w.count++;
-			assert (w.count <= 4);
 		}
 	}
 
@@ -435,13 +400,13 @@ bool GetFbxVertexData (
 
 	if ( !mesh.GetPolygonVertexNormal (polygon, vertex, normal) )
 	{
-		std::cerr << "No vertex normal in triangle " << polygon << ", vertex " << vertex << " of " << surfaceName << '\n';
+		std::cerr << "ERROR: No vertex normal in polygon " << polygon << ", vertex " << vertex << " of " << surfaceName << '\n';
 		return false;
 	}
 
 	if ( !mesh.GetPolygonVertexUV (polygon, vertex, uvNameSet, texcoord, noTexcoord) || noTexcoord )
 	{
-		std::cerr << "No texture coordinate in triangle " << polygon << ", vertex " << vertex << " of " << surfaceName << '\n';
+		std::cerr << "ERROR: No texture coordinate in polygon " << polygon << ", vertex " << vertex << " of " << surfaceName << '\n';
 		return false;
 	}
 
@@ -485,7 +450,7 @@ ModelDetailData CreateModelLod (
 
 		if ( numNormals == 0 )
 		{
-			std::cerr << "No normals for surface " << i << " (" << surfaceHierarchy.name << ")\n";
+			std::cerr << "ERROR: No normals for surface " << i << " (" << surfaceHierarchy.name << ")\n";
 			continue;
 		}
 
@@ -511,7 +476,7 @@ ModelDetailData CreateModelLod (
 
 			if ( numPositions != 3 )
 			{
-				std::cerr << "Tag " << surfaceHierarchy.name << " should have 3 vertex positions, but has " << numPositions << '\n';
+				std::cerr << "ERROR: Tag '" << surfaceHierarchy.name << "' should have 3 vertex positions, but has " << numPositions << ".\n";
 				continue;
 			}
 			
@@ -700,7 +665,7 @@ bool ReorderSurfacesToLOD0 ( std::vector<FbxNode *>& nodes, const std::map<std::
 		std::map<std::string, int>::const_iterator it = nameRemap.find (surfaceName);
 		if ( it == nameRemap.end() )
 		{
-			std::cerr << "LOD doesn't have surface " << surfaceName << '\n';
+			std::cerr << "ERROR: LOD doesn't have surface '" << surfaceName << "'.\n";
 			return false;
 		}
 
@@ -758,7 +723,7 @@ std::vector<ModelDetailData> GetModelData (
 
 		if ( !ReorderSurfacesToLOD0 (nodes, nameMapping) )
 		{
-			std::cerr << "Failed to create vertex data for LOD " << i << '\n';
+			std::cerr << "ERROR: Failed to create vertex data for LOD " << i << ".\n";
 
 			detailData.push_back (ModelDetailData());
 
@@ -860,6 +825,7 @@ bool WriteDataToFile ( const std::string& path, const char *begin, const char *e
 	std::ofstream file (path.c_str(), std::ios::binary);
 	if ( !file )
 	{
+		std::cerr << "ERROR: Failed to open '" << path << "' for writing.\n";
 		return false;
 	}
 
@@ -895,6 +861,7 @@ bool MakeGLMFile (
 {
 	if ( modelRoots.empty() )
 	{
+		std::cerr << "ERROR: No model LODs found.\n";
 		return false;
 	}
 
@@ -938,8 +905,7 @@ bool MakeGLMFile (
 
 	if ( !WriteSurfaceHierarchyData (*header, surfaceHierarchy, hierarchyOffsets, hierarchy) )
 	{
-		std::cerr << "Failed to write surface hierarchy data to file.\n";
-
+		std::cerr << "ERROR: Failed to write surface hierarchy data to file.\n";
 		return false;
 	}
 
@@ -947,7 +913,6 @@ bool MakeGLMFile (
 	if ( !WriteLODData (*header, &buffer[lodBase], modelDetails) )
 	{
 		std::cerr << "Failed to write vertex data to file.\n";
-
 		return false;
 	}
 
@@ -1072,8 +1037,9 @@ int main ( int argc, char *argv[] )
 
 	if ( !importer->Initialize (modelPath.c_str(), -1, fbxManager->GetIOSettings()) )
 	{
-		std::cerr << "Failed to import " << modelPath << ".\n";
+		std::cerr << "ERROR: Failed to import '" << modelPath << "': " << importer->GetStatus().GetErrorString() << ".\n";
 
+		importer->Destroy();
 		fbxManager->Destroy();
 
 		return EXIT_FAILURE;
@@ -1086,7 +1052,7 @@ int main ( int argc, char *argv[] )
 	FbxNode *root = scene->GetRootNode();
 	if ( root == nullptr )
 	{
-		std::cerr << "No root node :(\n";
+		std::cerr << "ERROR: The scene's root node could not be found.\n";
 
 		fbxManager->Destroy();
 
@@ -1094,19 +1060,29 @@ int main ( int argc, char *argv[] )
 	}
 
 	std::vector<FbxNode *> modelRoots (GetLodRootModels (*root));
-	std::sort (modelRoots.begin(), modelRoots.end(),
-		[]( const FbxNode *a, const FbxNode *b ) { return std::strcmp (a->GetName(), b->GetName()) < 0; });
 
-	if ( !MakeGLMFile (*scene, modelRoots, skeleton.get(), outputPath) )
+	if ( modelRoots.empty() )
 	{
-		std::cerr << "Failed to create GLM file " << outputPath << ".\n";
+		std::cerr << "ERROR: No model LODs found.\n";
 
 		fbxManager->Destroy();
 
 		return EXIT_FAILURE;
 	}
 
-	std::cout << "GLM file has been written to " << outputPath << ".\n";
+	std::sort (modelRoots.begin(), modelRoots.end(),
+		[]( const FbxNode *a, const FbxNode *b ) { return std::strcmp (a->GetName(), b->GetName()) < 0; });
+
+	if ( !MakeGLMFile (*scene, modelRoots, skeleton.get(), outputPath) )
+	{
+		std::cerr << "ERROR: Failed to create GLM file " << outputPath << ".\n";
+
+		fbxManager->Destroy();
+
+		return EXIT_FAILURE;
+	}
+
+	std::cout << "GLM file has been written to '" << outputPath << "'.\n";
 
 	fbxManager->Destroy();
 
