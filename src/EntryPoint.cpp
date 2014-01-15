@@ -460,7 +460,7 @@ ModelDetailData CreateModelLod (
 		std::vector<mdxmTriangle_t>& triangles = data.surfaces[i].triangles;
 		triangles.reserve (numPolygons);
 
-		FbxAMatrix globalMatrix = scene.GetEvaluator()->GetNodeGlobalTransform (&node);
+		FbxAMatrix globalMatrix = scene.GetAnimationEvaluator()->GetNodeGlobalTransform (&node);
 
 		uniqueVertices.clear();
 
