@@ -15,9 +15,9 @@ set(HEADER_FILES
 
 if(NOT FBX_ROOT)
 	if(APPLE)
-		set(FBX_ROOT "/Applications/Autodesk/FBX\ SDK/2014.1")
+		set(FBX_ROOT "/Applications/Autodesk/FBX\ SDK/2014.2.1")
 	elseif(WIN32)
-		set(FBX_ROOT "$ENV{ProgramFiles}\\Autodesk\\FBX\\FBX SDK\\2014.1")
+		set(FBX_ROOT "$ENV{ProgramFiles}\\Autodesk\\FBX\\FBX SDK\\2014.2.1")
 	endif()
 endif()
 
