@@ -5,7 +5,7 @@
 
 #include "IO.h"
 
-Skeleton *LoadGLA ( const std::string& animationPath )
+std::unique_ptr<Skeleton> LoadGLA ( const std::string& animationPath )
 {
 	std::vector<char> buffer;
 	if ( !ReadFile (animationPath, buffer) )
@@ -29,7 +29,7 @@ Skeleton *LoadGLA ( const std::string& animationPath )
 
 	char *skelBase = &buffer[sizeof (mdxaHeader_t)];
 	mdxaSkelOffsets_t *offsets = reinterpret_cast<mdxaSkelOffsets_t *>(skelBase);
-	Skeleton *skeleton = new Skeleton();
+	std::unique_ptr<Skeleton> skeleton (new Skeleton());
 
 	skeleton->name = header->name;
 	skeleton->scale = header->scale;

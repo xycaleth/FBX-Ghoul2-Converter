@@ -2,6 +2,7 @@
 #define GLA_H
 
 #include <map>
+#include <memory>
 #include <string>
 
 const int MDXA_IDENT = ('A' << 24) | ('G' << 16) | ('L' << 8) | '2';
@@ -49,6 +50,6 @@ struct Skeleton
 	float scale;
 };
 
-Skeleton *LoadGLA ( const std::string& animationPath );
+std::unique_ptr<Skeleton> LoadGLA ( const std::string& animationPath );
 
 #endif

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <fbxsdk.h>
+#include <memory>
 #include <map>
 #include <set>
 #include <string>
@@ -1010,18 +1011,15 @@ int main ( int argc, char *argv[] )
 		}
 	}
 
-	// auto_ptr is deprecated in C++11, but FBX doesn't play nicely with
-	// C++11 libraries on OS X, so we have to resort to using auto_ptr
-	// instead.
-	std::auto_ptr<Skeleton> skeleton;
+	std::unique_ptr<Skeleton> skeleton;
 	std::string modelPath (args.back());
 
 	std::cout << "Converting " << modelPath << " to GLM.\n";
 
 	if ( !animationFile.empty() )
 	{
-		skeleton = std::auto_ptr<Skeleton>(LoadGLA (animationFile));
-		if ( skeleton.get() == nullptr )
+		skeleton = LoadGLA (animationFile);
+		if ( !skeleton )
 		{
 			return EXIT_FAILURE;
 		}
